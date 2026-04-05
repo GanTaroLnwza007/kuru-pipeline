@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip show:*)",
+      "Bash(python -m pip show uv)",
+      "Bash(uv --version)",
+      "Bash(pip install:*)",
+      "Bash(uv init:*)",
+      "Bash(rm -f main.py)",
+      "Bash(mkdir -p data/raw/tcas1 data/raw/curriculum data/processed src/kuru/ingestion src/kuru/db src/kuru/rag src/kuru/scripts db)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)"
+    ]
+  }
+}

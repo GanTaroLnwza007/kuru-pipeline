@@ -1,0 +1,34 @@
+[project]
+name = "kuru-pipeline"
+version = "0.1.0"
+description = "KUru data ingestion pipeline — PDF extraction, embedding, RAG, and Neo4j population"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24.0",
+    "supabase>=2.5.0",
+    "neo4j>=5.19.0",
+    "pythainlp>=5.0.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+    "gdown>=5.2.0",
+    "httpx>=0.27.0",
+    "tenacity>=8.3.0",
+    "pydantic>=2.7.0",
+    "google-genai>=1.70.0",
+    "psycopg2-binary>=2.9.11",
+]
+
+[project.scripts]
+kuru-download   = "kuru.scripts.download_data:main"
+kuru-setup-db   = "kuru.scripts.setup_db:main"
+kuru-ingest-mko = "kuru.scripts.ingest_curriculum:main"
+kuru-ingest-tcas = "kuru.scripts.ingest_tcas:main"
+kuru-demo       = "kuru.scripts.demo_rag:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kuru"]
