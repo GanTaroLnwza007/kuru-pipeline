@@ -97,6 +97,17 @@ def count_chunks(client: Client, source_file: str) -> int:
     return result.count or 0
 
 
+def get_programs(
+    client: Client,
+    faculty: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch all known programs, optionally filtered by faculty."""
+    q = client.table("programs").select("id, name_th, name_en, faculty, degree_level")
+    if faculty:
+        q = q.ilike("faculty", f"%{faculty}%")
+    return q.order("faculty").execute().data or []
+
+
 def get_tcas_records(
     client: Client,
     program_id: str | None = None,
