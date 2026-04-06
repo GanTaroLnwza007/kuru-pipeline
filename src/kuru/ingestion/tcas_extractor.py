@@ -32,7 +32,7 @@ def _get_client() -> genai.Client:
         _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     return _client
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 # ─────────────────────────────────────────
@@ -45,9 +45,9 @@ class TCASRecord(BaseModel):
     round: str = Field(description="TCAS round: 'round1' | 'round2' | 'round3' | 'round4'")
     quota: int | None = Field(default=None)
     gpax_min: float | None = Field(default=None)
-    exam_criteria: dict[str, Any] = Field(default_factory=dict)
-    portfolio_requirements: dict[str, Any] = Field(default_factory=dict)
-    deadlines: dict[str, Any] = Field(default_factory=dict)
+    exam_criteria: dict[str, Any] | None = Field(default=None)
+    portfolio_requirements: dict[str, Any] | None = Field(default=None)
+    deadlines: dict[str, Any] | None = Field(default=None)
 
 
 EXTRACTION_PROMPT = """You are a structured data extractor for Thai university admission documents.
@@ -78,10 +78,9 @@ Document text:
 def _call_gemini(text: str) -> str:
     response = _get_client().models.generate_content(
         model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.format(text=text[:40000]),
+        contents=EXTRACTION_PROMPT.replace("{text}", text[:40000]),
         config=types.GenerateContentConfig(
             temperature=0.0,
-            response_mime_type="application/json",
         ),
     )
     return response.text or "[]"
@@ -90,11 +89,18 @@ def _call_gemini(text: str) -> str:
 def _parse_records(raw_json: str) -> list[dict[str, Any]]:
     # Strip markdown fences if Gemini ignores the mime_type instruction
     cleaned = re.sub(r"```(?:json)?|```", "", raw_json).strip()
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        print(f"  JSON parse error: {exc}\n  Raw response (first 200 chars): {cleaned[:200]}")
+        return []
     if isinstance(data, dict):
         # Sometimes Gemini wraps in {"records": [...]}
         data = data.get("records", data.get("data", [data]))
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        print(f"  Unexpected Gemini response type ({type(data).__name__}), value: {repr(cleaned[:200])}")
+        return []
+    return data
 
 
 def extract_tcas_from_pdf(

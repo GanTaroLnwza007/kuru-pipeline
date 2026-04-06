@@ -27,7 +27,7 @@ def _get_client() -> genai.Client:
     return _client
 
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 # If PyMuPDF extracts fewer than this many chars total, treat as scanned.
 SCANNED_CHAR_THRESHOLD = 500
@@ -129,7 +129,7 @@ def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
             model=GEMINI_MODEL,
             contents=[
                 types.Part.from_uri(file_uri=file_ref.uri, mime_type="application/pdf"),
-                types.Part.from_text(PDF_EXTRACT_PROMPT),
+                types.Part.from_text(text=PDF_EXTRACT_PROMPT),
             ],
         )
     finally:

@@ -1,54 +1,40 @@
-"""Batch embedder — Gemini text-embedding-004 → Supabase pgvector upsert."""
+"""Batch embedder — local multilingual-e5-base → Supabase pgvector upsert.
+
+Uses sentence-transformers (intfloat/multilingual-e5-base) which:
+- Outputs 768-dim vectors (matches existing Supabase schema exactly)
+- Supports Thai natively
+- Runs offline — no API quota
+"""
 
 from __future__ import annotations
 
-import os
-import time
 from typing import Any
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from sentence_transformers import SentenceTransformer
 
 from kuru.db import supabase_client as db
 from kuru.ingestion.chunker import Chunk
 
-load_dotenv()
+# Model is downloaded once on first use (~1.1 GB) and cached in ~/.cache/huggingface/
+EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
+BATCH_SIZE = 64  # local inference — larger batches are fine
+
+_model: SentenceTransformer | None = None
 
 
-def _is_transient(exc: BaseException) -> bool:
-    if isinstance(exc, (TypeError, ValueError, AttributeError, UnicodeError)):
-        return False
-    return any(c in str(exc) for c in ("429", "500", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"))
+def _get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(EMBEDDING_MODEL)
+    return _model
 
 
-_client: genai.Client | None = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-
-EMBEDDING_MODEL = "gemini-embedding-001"
-BATCH_SIZE = 20    # Reduced from 100 — safer for free tier per-request limits
-RATE_LIMIT_SLEEP = 4.0  # seconds between batches (free tier: 100 RPM embedding)
-
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(_is_transient), reraise=True)
 def _embed_batch(texts: list[str]) -> list[list[float]]:
-    response = _get_client().models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(
-            task_type="RETRIEVAL_DOCUMENT",
-            output_dimensionality=768,
-        ),
-    )
-    return [e.values for e in response.embeddings]
+    """Embed a batch of texts. multilingual-e5 wants a 'passage: ' prefix for documents."""
+    prefixed = [f"passage: {t}" for t in texts]
+    model = _get_model()
+    vectors = model.encode(prefixed, normalize_embeddings=True, show_progress_bar=False)
+    return [v.tolist() for v in vectors]
 
 
 def embed_and_store(
@@ -87,6 +73,5 @@ def embed_and_store(
 
         db.upsert_chunks(client, rows)
         total += len(rows)
-        time.sleep(RATE_LIMIT_SLEEP)
 
     return total

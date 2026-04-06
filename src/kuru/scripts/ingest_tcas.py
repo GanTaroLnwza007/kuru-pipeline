@@ -48,7 +48,8 @@ def main() -> None:
                 )
                 total_records += len(records)
             except Exception as exc:
-                console.print(f"  [red]✗[/red] {pdf.name} — {exc}")
+                safe_msg = str(exc).encode("ascii", errors="replace").decode()
+                console.print(f"  [red]✗[/red] {pdf.name} — {safe_msg}")
             progress.advance(task)
 
     console.print(f"\n[bold]Done.[/bold] Total TCAS records stored: [green]{total_records}[/green]")

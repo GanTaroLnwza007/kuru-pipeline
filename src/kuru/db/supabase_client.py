@@ -101,6 +101,8 @@ def get_tcas_records(
     client: Client,
     program_id: str | None = None,
     round_: str | None = None,
+    program_name_search: str | None = None,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Fetch TCAS records with optional filters."""
     query = client.table("tcas_records").select("*")
@@ -108,4 +110,6 @@ def get_tcas_records(
         query = query.eq("program_id", program_id)
     if round_:
         query = query.eq("round", round_)
-    return query.execute().data or []
+    if program_name_search:
+        query = query.ilike("program_name_raw", f"%{program_name_search}%")
+    return query.limit(limit).execute().data or []

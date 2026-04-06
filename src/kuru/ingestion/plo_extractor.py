@@ -32,7 +32,7 @@ def _get_client() -> genai.Client:
         _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     return _client
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 # ─────────────────────────────────────────
@@ -113,10 +113,9 @@ Document text (first 30,000 characters):
 def _call_gemini(text: str) -> str:
     response = _get_client().models.generate_content(
         model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.format(text=text[:30000]),
+        contents=EXTRACTION_PROMPT.replace("{text}", text[:30000]),
         config=types.GenerateContentConfig(
             temperature=0.0,
-            response_mime_type="application/json",
         ),
     )
     return response.text or "{}"
