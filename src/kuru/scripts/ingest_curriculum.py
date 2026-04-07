@@ -7,6 +7,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows UTF-8 fix
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -15,11 +18,11 @@ from kuru.db import supabase_client as db
 from kuru.ingestion.chunker import chunk_document
 from kuru.ingestion.embedder import embed_and_store
 from kuru.ingestion.plo_extractor import extract_plos_from_pdf, store_plos_to_neo4j
-from kuru.ingestion.text_extractor import extract_text, full_text
+from kuru.ingestion.text_extractor import extract_text_auto, full_text
 
 load_dotenv()
 
-console = Console()
+console = Console(legacy_windows=False)
 
 DEFAULT_CAMPUS = "บางเขน"
 INTER_FILE_SLEEP = 5   # seconds between files — Gemini 2.0-flash free tier: 15 RPM
@@ -38,8 +41,8 @@ def _program_id_from_path(pdf_path: Path, campus: str) -> str:
     return f"{campus_slug}_{name_part}"
 
 
-def ingest_pdf(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
-    """Full pipeline for one curriculum PDF. Returns a status dict."""
+def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
+    """Full pipeline for one curriculum document (PDF or DOCX). Returns a status dict."""
     program_id = _program_id_from_path(pdf_path, campus)
     status = {
         "file": pdf_path.name,
@@ -64,7 +67,7 @@ def ingest_pdf(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
 
     # ── Text extraction ─────────────────────────────────────────────────────
     try:
-        pages = extract_text(pdf_path, use_vision_fallback=True, verbose=verbose)
+        pages = extract_text_auto(pdf_path, use_vision_fallback=True, verbose=verbose)
         doc_text = full_text(pages)
     except Exception as exc:
         status["errors"].append(f"text extraction ({type(exc).__name__}): {exc}")
@@ -102,32 +105,38 @@ def ingest_pdf(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
     return status
 
 
-def find_pdfs(base_dir: Path, campus: str) -> list[Path]:
-    matches = [p for p in base_dir.rglob("*.pdf") if campus in str(p)]
+def find_documents(base_dir: Path, campus: str) -> list[Path]:
+    """Return all ingestable documents (.pdf, .docx) for the given campus."""
+    all_docs = sorted(
+        p for p in base_dir.rglob("*")
+        if p.suffix.lower() in {".pdf", ".docx"}
+    )
+    matches = [p for p in all_docs if campus in str(p)]
     if matches:
-        return sorted(matches)
-    all_pdfs = sorted(base_dir.rglob("*.pdf"))
-    if all_pdfs:
+        return matches
+    if all_docs:
         console.print(
             f"[yellow]Warning: no subfolder named '{campus}' found — "
-            f"processing all {len(all_pdfs)} PDFs.[/yellow]"
+            f"processing all {len(all_docs)} document(s).[/yellow]"
         )
-    return all_pdfs
+    return all_docs
 
 
-def main(campus: str = DEFAULT_CAMPUS) -> None:
+def main(campus: str | None = None) -> None:
+    if campus is None:
+        campus = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CAMPUS
     base_dir = Path("data/raw/curriculum")
     if not base_dir.exists():
         console.print("[red]data/raw/curriculum/ not found. Run kuru-download first.[/red]")
         sys.exit(1)
 
-    pdfs = find_pdfs(base_dir, campus)
-    if not pdfs:
-        console.print(f"[yellow]No PDFs found for campus '{campus}' under {base_dir}[/yellow]")
+    docs = find_documents(base_dir, campus)
+    if not docs:
+        console.print(f"[yellow]No documents found for campus '{campus}' under {base_dir}[/yellow]")
         sys.exit(0)
 
     console.print(f"\n[bold]Campus:[/bold] [cyan]{campus}[/cyan]")
-    console.print(f"[bold]Found {len(pdfs)} PDF(s) — checking which need ingestion …[/bold]\n")
+    console.print(f"[bold]Found {len(docs)} document(s) — checking which need ingestion …[/bold]\n")
 
     results = []
     with Progress(
@@ -136,10 +145,10 @@ def main(campus: str = DEFAULT_CAMPUS) -> None:
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Processing …", total=len(pdfs))
-        for pdf in pdfs:
+        task = progress.add_task("Processing …", total=len(docs))
+        for pdf in docs:
             progress.update(task, description=f"[cyan]{pdf.name[:60]}[/cyan]")
-            status = ingest_pdf(pdf, campus=campus, verbose=False)
+            status = ingest_document(pdf, campus=campus, verbose=False)
             results.append(status)
             progress.advance(task)
             if not status["skipped"]:

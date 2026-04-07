@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -14,6 +13,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
+from kuru.ingestion.utils import is_transient_error, safe_print
 
 load_dotenv()
 
@@ -33,19 +34,11 @@ GEMINI_MODEL = "gemini-2.5-flash-lite"
 SCANNED_CHAR_THRESHOLD = 500
 
 
-def _safe_print(msg: str) -> None:
-    """Print safely on Windows regardless of console encoding."""
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode("ascii", errors="replace").decode())
-
-
 @dataclass
 class PageText:
     page_num: int
     text: str
-    extraction_method: str  # 'pymupdf' | 'gemini_files' | 'failed'
+    extraction_method: str  # 'pymupdf' | 'gemini_files' | 'python-docx' | 'failed'
 
 
 # ─────────────────────────────────────────
@@ -77,18 +70,10 @@ PDF_EXTRACT_PROMPT = (
 )
 
 
-def _is_transient(exc: BaseException) -> bool:
-    """Only retry on API/network errors — not programming errors like TypeError."""
-    if isinstance(exc, (TypeError, ValueError, AttributeError, UnicodeError)):
-        return False
-    msg = str(exc)
-    return any(code in msg for code in ("429", "500", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"))
-
-
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=2, min=15, max=120),
-    retry=retry_if_exception(_is_transient),
+    retry=retry_if_exception(is_transient_error),
     reraise=True,
 )
 def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
@@ -104,7 +89,7 @@ def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
             f.write(pdf_path.read_bytes())
 
         if verbose:
-            _safe_print(f"  Uploading {pdf_path.name} to Gemini Files API …")
+            safe_print(f"  Uploading {pdf_path.name} to Gemini Files API …")
 
         uploaded = client.files.upload(
             file=tmp_path,
@@ -122,7 +107,7 @@ def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
         file_ref = client.files.get(name=uploaded.name)
 
     if verbose:
-        _safe_print("  File active — extracting text …")
+        safe_print("  File active — extracting text …")
 
     try:
         response = client.models.generate_content(
@@ -164,14 +149,47 @@ def extract_text(
         return pages
 
     if verbose:
-        _safe_print(f"  Low text yield ({total_chars} chars) — using Gemini Files API")
+        safe_print(f"  Low text yield ({total_chars} chars) — using Gemini Files API")
 
     try:
         text = _extract_with_gemini_files(pdf_path, verbose=verbose)
         return [PageText(page_num=0, text=text, extraction_method="gemini_files")]
     except Exception as exc:
-        _safe_print(f"  Gemini Files extraction failed ({type(exc).__name__}): {exc}")
+        safe_print(f"  Gemini Files extraction failed ({type(exc).__name__}): {exc}")
         return [PageText(page_num=0, text="", extraction_method="failed")]
+
+
+def extract_text_from_docx(docx_path: Path) -> list[PageText]:
+    """Extract text from a DOCX file using python-docx.
+
+    Includes body paragraphs and table cell text.
+    """
+    try:
+        import docx  # python-docx
+
+        doc = docx.Document(str(docx_path))
+        parts: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if row_cells:
+                    parts.append("\t".join(row_cells))
+        return [PageText(page_num=0, text="\n".join(parts), extraction_method="python-docx")]
+    except Exception as exc:
+        safe_print(f"  DOCX extraction failed ({type(exc).__name__}): {exc}")
+        return [PageText(page_num=0, text="", extraction_method="failed")]
+
+
+def extract_text_auto(
+    path: str | Path,
+    use_vision_fallback: bool = True,
+    verbose: bool = False,
+) -> list[PageText]:
+    """Dispatch to the right extractor based on file extension (.pdf or .docx)."""
+    path = Path(path)
+    if path.suffix.lower() == ".docx":
+        return extract_text_from_docx(path)
+    return extract_text(path, use_vision_fallback=use_vision_fallback, verbose=verbose)
 
 
 def full_text(pages: list[PageText]) -> str:

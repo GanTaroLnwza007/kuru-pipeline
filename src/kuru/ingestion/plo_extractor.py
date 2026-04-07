@@ -15,13 +15,10 @@ from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import neo4j_client as neo4j
-from kuru.ingestion.text_extractor import extract_text, full_text
+from kuru.ingestion.text_extractor import extract_text_auto, full_text
+from kuru.ingestion.utils import is_transient_error, safe_print
 
 load_dotenv()
-def _is_transient(exc: BaseException) -> bool:
-    if isinstance(exc, (TypeError, ValueError, AttributeError, UnicodeError)):
-        return False
-    return any(c in str(exc) for c in ("429", "500", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"))
 
 
 _client: genai.Client | None = None
@@ -109,11 +106,11 @@ Document text (first 30,000 characters):
 """
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(_is_transient), reraise=True)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
 def _call_gemini(text: str) -> str:
     response = _get_client().models.generate_content(
         model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.replace("{text}", text[:30000]),
+        contents=EXTRACTION_PROMPT.replace("{text}", text[:200000]),
         config=types.GenerateContentConfig(
             temperature=0.0,
         ),
@@ -129,9 +126,9 @@ def extract_plos_from_pdf(
     """Extract PLOs from a มคอ.2 PDF and return a structured result."""
     pdf_path = Path(pdf_path)
     if verbose:
-        print(f"Extracting PLOs from {pdf_path.name} …")
+        safe_print(f"Extracting PLOs from {pdf_path.name} …")
 
-    pages = extract_text(pdf_path, use_vision_fallback=True, verbose=verbose)
+    pages = extract_text_auto(pdf_path, use_vision_fallback=True, verbose=verbose)
     doc_text = full_text(pages)
 
     raw_json = _call_gemini(doc_text)
@@ -140,7 +137,7 @@ def extract_plos_from_pdf(
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        print(f"  Failed to parse PLO JSON: {exc}")
+        safe_print(f"  Failed to parse PLO JSON: {exc}")
         return None
 
     plos_raw = data.get("plos", [])

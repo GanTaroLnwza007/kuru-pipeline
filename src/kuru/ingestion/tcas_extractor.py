@@ -16,15 +16,12 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from kuru.db import supabase_client as db
 from kuru.ingestion.text_extractor import extract_text, full_text
+from kuru.ingestion.utils import is_transient_error, safe_print
 
 load_dotenv()
-def _is_transient(exc: BaseException) -> bool:
-    if isinstance(exc, (TypeError, ValueError, AttributeError, UnicodeError)):
-        return False
-    return any(c in str(exc) for c in ("429", "500", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"))
-
 
 _client: genai.Client | None = None
+
 
 def _get_client() -> genai.Client:
     global _client
@@ -32,7 +29,11 @@ def _get_client() -> genai.Client:
         _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     return _client
 
+
 GEMINI_MODEL = "gemini-2.5-flash-lite"
+
+# Maximum sheets processed per xlsx workbook — guard against runaway API costs.
+MAX_XLSX_SHEETS = 20
 
 
 # ─────────────────────────────────────────
@@ -74,11 +75,11 @@ Document text:
 # Extraction
 # ─────────────────────────────────────────
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(_is_transient), reraise=True)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
 def _call_gemini(text: str) -> str:
     response = _get_client().models.generate_content(
         model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.replace("{text}", text[:40000]),
+        contents=EXTRACTION_PROMPT.replace("{text}", text[:200000]),
         config=types.GenerateContentConfig(
             temperature=0.0,
         ),
@@ -87,20 +88,30 @@ def _call_gemini(text: str) -> str:
 
 
 def _parse_records(raw_json: str) -> list[dict[str, Any]]:
-    # Strip markdown fences if Gemini ignores the mime_type instruction
+    # Strip markdown fences if Gemini ignores the instruction
     cleaned = re.sub(r"```(?:json)?|```", "", raw_json).strip()
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        print(f"  JSON parse error: {exc}\n  Raw response (first 200 chars): {cleaned[:200]}")
+        safe_print(f"  JSON parse error: {exc}\n  Raw response (first 200 chars): {cleaned[:200]}")
         return []
     if isinstance(data, dict):
         # Sometimes Gemini wraps in {"records": [...]}
         data = data.get("records", data.get("data", [data]))
     if not isinstance(data, list):
-        print(f"  Unexpected Gemini response type ({type(data).__name__}), value: {repr(cleaned[:200])}")
+        safe_print(f"  Unexpected Gemini response type ({type(data).__name__}), value: {repr(cleaned[:200])}")
         return []
     return data
+
+
+def _build_records(raw_records: list[dict[str, Any]]) -> list[TCASRecord]:
+    records: list[TCASRecord] = []
+    for r in raw_records:
+        try:
+            records.append(TCASRecord(**r))
+        except Exception as exc:
+            safe_print(f"  Warning: skipping malformed record — {exc}: {r}")
+    return records
 
 
 def extract_tcas_from_pdf(
@@ -110,28 +121,72 @@ def extract_tcas_from_pdf(
     """Extract structured TCAS records from a PDF file."""
     pdf_path = Path(pdf_path)
     if verbose:
-        print(f"Extracting text from {pdf_path.name} …")
+        safe_print(f"Extracting text from {pdf_path.name} …")
 
     pages = extract_text(pdf_path, use_vision_fallback=True, verbose=verbose)
     doc_text = full_text(pages)
 
     if verbose:
-        print(f"  Extracted {len(doc_text)} chars. Calling Gemini for structured extraction …")
+        safe_print(f"  Extracted {len(doc_text)} chars. Calling Gemini for structured extraction …")
 
-    raw_json = _call_gemini(doc_text)
-    raw_records = _parse_records(raw_json)
+    return _build_records(_parse_records(_call_gemini(doc_text)))
 
-    records: list[TCASRecord] = []
-    for r in raw_records:
-        try:
-            records.append(TCASRecord(**r))
-        except Exception as exc:
-            print(f"  Warning: skipping malformed record — {exc}: {r}")
+
+def _sheet_to_text(ws: Any) -> str:
+    rows = []
+    for row in ws.iter_rows(values_only=True):
+        row_text = "\t".join("" if v is None else str(v) for v in row)
+        if row_text.strip():
+            rows.append(row_text)
+    return "\n".join(rows)
+
+
+def extract_tcas_from_xlsx(
+    xlsx_path: str | Path,
+    verbose: bool = False,
+) -> list[TCASRecord]:
+    """Extract structured TCAS records from an xlsx spreadsheet.
+
+    Each sheet is processed as a separate Gemini call. Duplicate
+    (program_name_raw, round) pairs across sheets are deduplicated (first wins).
+    """
+    import openpyxl
+
+    xlsx_path = Path(xlsx_path)
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+
+    sheets = wb.sheetnames[:MAX_XLSX_SHEETS]
+    if len(wb.sheetnames) > MAX_XLSX_SHEETS:
+        safe_print(f"  Warning: workbook has {len(wb.sheetnames)} sheets; processing first {MAX_XLSX_SHEETS} only.")
 
     if verbose:
-        print(f"  Extracted {len(records)} TCAS records.")
+        safe_print(f"  xlsx: {len(sheets)} sheet(s) — processing each separately …")
 
-    return records
+    all_records: list[TCASRecord] = []
+    seen: set[str] = set()
+
+    for sheet_name in sheets:
+        ws = wb[sheet_name]
+        text = f"=== Sheet: {sheet_name} ===\n{_sheet_to_text(ws)}"
+
+        if verbose:
+            safe_print(f"    Sheet '{sheet_name}': {len(text)} chars -> Gemini ...")
+
+        sheet_new = 0
+        for rec in _build_records(_parse_records(_call_gemini(text))):
+            key = f"{rec.program_name_raw}|{rec.round}"
+            if key not in seen:
+                seen.add(key)
+                all_records.append(rec)
+                sheet_new += 1
+
+        if verbose:
+            safe_print(f"    -> {sheet_new} new record(s) (total so far: {len(all_records)})")
+
+    if verbose:
+        safe_print(f"  xlsx done: {len(all_records)} unique TCAS records extracted.")
+
+    return all_records
 
 
 def store_tcas_records(

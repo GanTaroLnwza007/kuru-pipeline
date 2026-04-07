@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows UTF-8 fix
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
@@ -16,7 +19,7 @@ from kuru.rag.query_engine import query
 
 load_dotenv()
 
-console = Console()
+console = Console(legacy_windows=False)
 
 SAMPLE_QUESTIONS = [
     # TCAS / Admission

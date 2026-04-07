@@ -113,7 +113,7 @@ def get_tcas_records(
     program_id: str | None = None,
     round_: str | None = None,
     program_name_search: str | None = None,
-    limit: int = 50,
+    limit: int = 200,
 ) -> list[dict[str, Any]]:
     """Fetch TCAS records with optional filters."""
     query = client.table("tcas_records").select("*")

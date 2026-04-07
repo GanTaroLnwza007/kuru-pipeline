@@ -38,10 +38,7 @@ def _get_embed_model() -> SentenceTransformer:
     return _get_model()
 
 
-def _is_transient(exc: BaseException) -> bool:
-    if isinstance(exc, (TypeError, ValueError, AttributeError, UnicodeError)):
-        return False
-    return any(c in str(exc) for c in ("429", "500", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE"))
+from kuru.ingestion.utils import is_transient_error
 
 # Thai + English keywords that signal a TCAS admission question
 TCAS_KEYWORDS = re.compile(
@@ -115,6 +112,28 @@ class RAGResult:
 
 
 # ─────────────────────────────────────────
+# TCAS record helpers
+# ─────────────────────────────────────────
+
+def _pick_round(recs: list[dict], preferred_round: str | None, limit: int = 5) -> list[dict]:
+    """Return up to `limit` records, putting the preferred round first."""
+    if preferred_round:
+        preferred = [r for r in recs if r.get("round") == preferred_round]
+        others    = [r for r in recs if r.get("round") != preferred_round]
+        return (preferred + others)[:limit]
+    return recs[:limit]
+
+
+def _dedup_add(records: list[dict], seen_ids: set[str], dest: list[dict]) -> None:
+    """Append records to dest, skipping any already in seen_ids (keyed by 'id')."""
+    for r in records:
+        rid = r.get("id") or r.get("program_name_raw", "")
+        if rid not in seen_ids:
+            seen_ids.add(rid)
+            dest.append(r)
+
+
+# ─────────────────────────────────────────
 # Embedding
 # ─────────────────────────────────────────
 
@@ -130,7 +149,7 @@ def _embed_query(query: str) -> list[float]:
 # Generation
 # ─────────────────────────────────────────
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30), retry=retry_if_exception(_is_transient), reraise=True)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30), retry=retry_if_exception(is_transient_error), reraise=True)
 def _generate(context: str, question: str) -> str:
     prompt = RAG_USER_TEMPLATE.format(context=context, question=question)
     response = _get_genai_client().models.generate_content(
@@ -242,34 +261,49 @@ def query(
     tcas_records: list[dict] = []
     used_tcas = False
     if is_tcas_query and not is_listing_query:
-        all_tcas = db.get_tcas_records(client, program_id=program_id)
-        if all_tcas:
-            q_words = [w for w in re.findall(r"[a-zA-Zก-๙]{4,}", question) if len(w) >= 4]
-            matched: list[dict] = []
-            # First try: match question words against TCAS program names
-            if q_words:
-                matched = [
-                    r for r in all_tcas
-                    if any(w.lower() in (r.get("program_name_raw") or "").lower() for w in q_words)
-                    or any(w.lower() in (r.get("faculty") or "").lower() for w in q_words)
-                ]
-            # Second try: use Thai words from ALL retrieved chunk filenames
-            # Use all_chunks (unfiltered) so CPE course chunks still contribute their filename
-            if not matched and all_chunks:
-                seen_sources: set[str] = set()
-                for chunk in all_chunks:
-                    src = chunk.get("source_file", "")
-                    if src in seen_sources:
-                        continue
-                    seen_sources.add(src)
-                    for tw in re.findall(r"[ก-๙]{5,}", src):
-                        candidates = db.get_tcas_records(client, program_name_search=tw, limit=10)
-                        matched.extend(candidates)
-                        if candidates:
-                            break
-            tcas_records = matched[:30] if matched else all_tcas[:10]
-            used_tcas = bool(tcas_records)
+        # Detect TCAS round from question (e.g. "TCAS3", "round 1", "รอบ2")
+        _round_m = re.search(r"(?:TCAS|รอบ)\s*([1-4])|round\s*([1-4])", question, re.IGNORECASE)
+        detected_round: str | None = None
+        if _round_m:
+            _n = _round_m.group(1) or _round_m.group(2)
+            detected_round = f"round{_n}"
+
+        q_words = [w for w in re.findall(r"[a-zA-Zก-๙]{4,}", question) if len(w) >= 4]
+
+        seen_ids: set[str] = set()
+        tcas_records_raw: list[dict] = []
+
+        # First try: DB-level keyword search against program_name_raw.
+        # Each q_word is searched separately so every program keyword gets a slot.
+        if q_words:
+            for w in q_words:
+                hits = db.get_tcas_records(client, program_name_search=w, limit=200)
+                if hits:
+                    _dedup_add(_pick_round(hits, detected_round), seen_ids, tcas_records_raw)
+
+        # Second try (fallback): Thai words from chunk filenames handle English queries
+        # where q_words don't appear in Thai program names.
+        if not tcas_records_raw and all_chunks:
+            seen_sources: set[str] = set()
+            for chunk in all_chunks:
+                src = chunk.get("source_file", "")
+                if src in seen_sources:
+                    continue
+                seen_sources.add(src)
+                for tw in re.findall(r"[ก-๙]{5,}", src):
+                    hits = db.get_tcas_records(client, program_name_search=tw, limit=200)
+                    if hits:
+                        _dedup_add(_pick_round(hits, detected_round), seen_ids, tcas_records_raw)
+                        break  # one keyword per source file is enough
+
+        # Final fallback: generic fetch when nothing else matched
+        if not tcas_records_raw:
+            _dedup_add(db.get_tcas_records(client, program_id=program_id, limit=10), seen_ids, tcas_records_raw)
+
+        tcas_records = tcas_records_raw[:30]
+        used_tcas = bool(tcas_records)
         debug_info["tcas_records_found"] = len(tcas_records)
+        debug_info["detected_round"] = detected_round
 
     # Work with only above-threshold chunks from here; fall back to raw list only if
     # nothing at all passed (so TCAS filename fallback still has something to work with).
