@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import sys
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -119,9 +121,48 @@ def find_documents(base_dir: Path, campus: str) -> list[Path]:
     return all_docs
 
 
-def main(campus: str | None = None) -> None:
+def sample_documents(docs: list[Path], n: int, campus_dir: Path) -> list[Path]:
+    """Pick n files spread proportionally across faculty subfolders for variety."""
+    by_faculty: defaultdict[str, list[Path]] = defaultdict(list)
+    for p in docs:
+        try:
+            faculty = p.relative_to(campus_dir).parts[0]
+        except (ValueError, IndexError):
+            faculty = "_other"
+        by_faculty[faculty].append(p)
+
+    faculties = sorted(by_faculty)
+    sampled: list[Path] = []
+    remaining = n
+
+    for i, faculty in enumerate(faculties):
+        faculties_left = len(faculties) - i
+        take = math.ceil(remaining / faculties_left)
+        take = min(take, len(by_faculty[faculty]), remaining)
+        sampled.extend(by_faculty[faculty][:take])
+        remaining -= take
+        if remaining <= 0:
+            break
+
+    console.print(f"[dim]Sample: {len(sampled)} files across {len(by_faculty)} faculties[/dim]")
+    for faculty in faculties:
+        taken = [p for p in sampled if faculty in str(p)]
+        if taken:
+            console.print(f"  [dim]{faculty}: {len(taken)} file(s)[/dim]")
+    return sampled
+
+
+def main(campus: str | None = None, sample: int | None = None) -> None:
+    args = sys.argv[1:]
     if campus is None:
-        campus = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CAMPUS
+        campus = next((a for a in args if not a.startswith("--")), DEFAULT_CAMPUS)
+    if sample is None:
+        for a in args:
+            if a.startswith("--sample="):
+                sample = int(a.split("=", 1)[1])
+            elif a == "--sample" and args.index(a) + 1 < len(args):
+                sample = int(args[args.index(a) + 1])
+
     base_dir = Path("data/raw/curriculum")
     if not base_dir.exists():
         console.print("[red]data/raw/curriculum/ not found. Run kuru-download first.[/red]")
@@ -132,8 +173,12 @@ def main(campus: str | None = None) -> None:
         console.print(f"[yellow]No documents found for campus '{campus}' under {base_dir}[/yellow]")
         sys.exit(0)
 
+    campus_dir = base_dir / campus
+    if sample and sample < len(docs):
+        docs = sample_documents(docs, sample, campus_dir)
+
     console.print(f"\n[bold]Campus:[/bold] [cyan]{campus}[/cyan]")
-    console.print(f"[bold]Found {len(docs)} document(s) — checking which need ingestion …[/bold]\n")
+    console.print(f"[bold]Processing {len(docs)} document(s) — checking which need ingestion …[/bold]\n")
 
     # Pre-load embedding model once before threads start (avoids race condition).
     console.print("[dim]Loading embedding model …[/dim]")
@@ -182,5 +227,4 @@ def main(campus: str | None = None) -> None:
 
 
 if __name__ == "__main__":
-    campus_arg = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CAMPUS
-    main(campus=campus_arg)
+    main()
