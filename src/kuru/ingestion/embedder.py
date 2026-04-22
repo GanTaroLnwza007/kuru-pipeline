@@ -20,12 +20,15 @@ EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
 BATCH_SIZE = 64  # local inference — larger batches are fine
 
 _model: SentenceTransformer | None = None
+_model_lock = __import__("threading").Lock()
 
 
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
+        with _model_lock:
+            if _model is None:
+                _model = SentenceTransformer(EMBEDDING_MODEL)
     return _model
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows UTF-8 fix
@@ -13,11 +13,10 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from kuru.db import supabase_client as db
 from kuru.ingestion.chunker import chunk_document
-from kuru.ingestion.embedder import embed_and_store
+from kuru.ingestion.embedder import embed_and_store, _get_model
 from kuru.ingestion.text_extractor import extract_text_auto, full_text
 
 load_dotenv()
@@ -25,7 +24,7 @@ load_dotenv()
 console = Console(legacy_windows=False)
 
 DEFAULT_CAMPUS = "บางเขน"
-INTER_FILE_SLEEP = 0   # no rate-limit sleep needed on OpenRouter pay-as-you-go
+FILE_WORKERS = 3  # parallel file ingestion — 3 files × 3 OCR batch workers = 9 concurrent API calls
 
 
 def _program_id_from_path(pdf_path: Path, campus: str) -> str:
@@ -136,21 +135,27 @@ def main(campus: str | None = None) -> None:
     console.print(f"\n[bold]Campus:[/bold] [cyan]{campus}[/cyan]")
     console.print(f"[bold]Found {len(docs)} document(s) — checking which need ingestion …[/bold]\n")
 
+    # Pre-load embedding model once before threads start (avoids race condition).
+    console.print("[dim]Loading embedding model …[/dim]")
+    _get_model()
+
     results = []
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Processing …", total=len(docs))
-        for pdf in docs:
-            progress.update(task, description=f"[cyan]{pdf.name[:60]}[/cyan]")
-            status = ingest_document(pdf, campus=campus, verbose=False)
+    completed = 0
+    console.print(f"[dim]Running {FILE_WORKERS} files in parallel …[/dim]\n")
+
+    with ThreadPoolExecutor(max_workers=FILE_WORKERS) as pool:
+        futures = {pool.submit(ingest_document, pdf, campus, False): pdf for pdf in docs}
+        for future in as_completed(futures):
+            status = future.result()
             results.append(status)
-            progress.advance(task)
-            if not status["skipped"]:
-                time.sleep(INTER_FILE_SLEEP)
+            completed += 1
+            tag = "[dim]skip[/dim]" if status["skipped"] else (
+                "[red]FAIL[/red]" if status["errors"] else "[green]✓[/green]"
+            )
+            console.print(
+                f"  {tag} [{completed}/{len(docs)}] {status['file'][:55]}"
+                + (f" → chunks={status['chunks']}" if not status["skipped"] else "")
+            )
 
     # ── Summary ─────────────────────────────────────────────────────────────
     console.print("\n[bold]Ingestion Summary[/bold]")

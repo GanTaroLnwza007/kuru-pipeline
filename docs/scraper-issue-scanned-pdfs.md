@@ -84,25 +84,89 @@ but validate cost with a small subset first (e.g., one faculty folder).
 The ingest pipeline automatically falls back to vision OCR for scanned files.
 
 **Tested cost:** ~2 THB per 3 files → estimated ~170 THB total for all 260 PDFs.  
-**Estimated time:** 4–6 hours (average ~60–90s per file). Run overnight.
+**Estimated time:** ~12–13 hours with 3-file parallelism (3 files × 3 OCR workers = 9 concurrent API calls).
 
-```bash
-# 1. Clear old (empty) data from the failed run
-uv run kuru-setup-db          # re-creates tables if needed
+> On Windows, always prefix commands with `$env:PYTHONUTF8=1;` in PowerShell to avoid Thai character encoding errors.
 
-# 2. Run the full ingest (OCR fallback fires automatically on scanned PDFs)
-PYTHONUTF8=1 uv run kuru-ingest-mko
+```powershell
+# 1. Re-create tables if DB was wiped
+$env:PYTHONUTF8=1; uv run kuru-setup-db
 
-# 3. After ingest, verify with the demo chatbot
-PYTHONUTF8=1 uv run kuru-demo
+# 2. Re-ingest TCAS if also wiped
+$env:PYTHONUTF8=1; uv run kuru-ingest-tcas
+
+# 3. Run the full curriculum ingest (leave running overnight)
+$env:PYTHONUTF8=1; uv run kuru-ingest-mko
+
+# 4. Verify with the demo chatbot
+$env:PYTHONUTF8=1; uv run kuru-demo
 ```
 
-> `PYTHONUTF8=1` is required on Windows to avoid Thai character encoding errors in the terminal.
+---
+
+### Pausing and resuming
+
+**You can safely Ctrl+C at any time.** Re-running the same command resumes automatically —
+any file that already has chunks in Supabase is skipped. No data is lost on a clean stop.
+
+```powershell
+# Just re-run the same command — it skips completed files and continues from where it stopped
+$env:PYTHONUTF8=1; uv run kuru-ingest-mko
+```
+
+---
+
+### Crash recovery
+
+**Mostly safe.** Each file goes through two phases:
+
+| Phase | Duration | If crash here |
+|-------|----------|---------------|
+| OCR (Gemini API) | ~8 min/file | Nothing written to DB → file retried on next run ✓ |
+| Embed + Supabase upsert | ~5–10 sec/file | Partial chunks may be in DB → file skipped on next run ⚠ |
+
+The crash risk window is small (upsert takes seconds vs OCR taking minutes). With 3 parallel
+files, at most 3 files could be affected.
+
+**If a file was partially ingested** (some chunks in DB but data looks wrong), force re-ingest it:
+
+```powershell
+# In a Python shell — delete chunks for a specific file then re-run ingest
+$env:PYTHONUTF8=1; uv run python -c "
+from kuru.db.supabase_client import get_client
+db = get_client()
+fname = 'ปร.ด._กีฏวิทยา_2565.pdf'   # replace with affected filename
+db.table('chunks').delete().eq('source_file', fname).execute()
+print('Deleted chunks for', fname)
+"
+
+# Then re-run ingest — it will re-process that file
+$env:PYTHONUTF8=1; uv run kuru-ingest-mko
+```
+
+---
 
 ### Re-ingesting TCAS after the DB was cleared
 
 If `tcas_records` was also wiped during debugging, re-ingest it first:
 
-```bash
-PYTHONUTF8=1 uv run kuru-ingest-tcas
+```powershell
+$env:PYTHONUTF8=1; uv run kuru-ingest-tcas
+```
+
+---
+
+### Checking ingestion progress mid-run
+
+Open a second terminal and run:
+
+```powershell
+$env:PYTHONUTF8=1; uv run python -c "
+from kuru.db.supabase_client import get_client
+db = get_client()
+count = db.table('chunks').select('id', count='exact').execute()
+files = db.table('chunks').select('source_file').execute()
+unique = len(set(r['source_file'] for r in files.data))
+print(f'Chunks: {count.count}  |  Files ingested: {unique} / 260')
+"
 ```
