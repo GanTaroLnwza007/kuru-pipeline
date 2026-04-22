@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 import time
@@ -17,7 +18,6 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from kuru.db import supabase_client as db
 from kuru.ingestion.chunker import chunk_document
 from kuru.ingestion.embedder import embed_and_store
-from kuru.ingestion.plo_extractor import extract_plos_from_pdf, store_plos_to_neo4j
 from kuru.ingestion.text_extractor import extract_text_auto, full_text
 
 load_dotenv()
@@ -25,7 +25,7 @@ load_dotenv()
 console = Console(legacy_windows=False)
 
 DEFAULT_CAMPUS = "บางเขน"
-INTER_FILE_SLEEP = 5   # seconds between files — Gemini 2.0-flash free tier: 15 RPM
+INTER_FILE_SLEEP = 0   # no rate-limit sleep needed on OpenRouter pay-as-you-go
 
 
 def _program_id_from_path(pdf_path: Path, campus: str) -> str:
@@ -35,9 +35,19 @@ def _program_id_from_path(pdf_path: Path, campus: str) -> str:
         "ศรีราชา": "sriracha",
     }.get(campus, re.sub(r"\s+", "_", campus).lower())
 
-    stem = pdf_path.stem
-    ascii_part = re.sub(r"[^a-zA-Z0-9]", "", stem.encode("ascii", errors="ignore").decode()).lower()
-    name_part = ascii_part[:24] if ascii_part else f"doc{abs(hash(stem)) % 9999}"
+    # Use the faculty subfolder (e.g. "eng", "agri") as a stable prefix.
+    # The scraper places files under data/raw/curriculum/<campus>/<faculty>/<file>.
+    campus_dir = Path("data/raw/curriculum") / campus
+    try:
+        rel = pdf_path.relative_to(campus_dir)
+        faculty_part = rel.parts[0] if len(rel.parts) > 1 else ""
+        faculty_part = re.sub(r"[^a-zA-Z0-9]", "", faculty_part.encode("ascii", errors="ignore").decode()).lower()
+    except ValueError:
+        faculty_part = ""
+
+    # Hash the stem to guarantee uniqueness even when Thai names strip to nothing.
+    stem_hash = hashlib.md5(pdf_path.stem.encode()).hexdigest()[:8]
+    name_part = f"{faculty_part}_{stem_hash}" if faculty_part else stem_hash
     return f"{campus_slug}_{name_part}"
 
 
@@ -88,19 +98,7 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
     except Exception as exc:
         status["errors"].append(f"embedding ({type(exc).__name__}): {exc}")
 
-    # ── PLO extraction + Neo4j ──────────────────────────────────────────────
-    try:
-        result = extract_plos_from_pdf(pdf_path, program_id=program_id, verbose=verbose)
-        if result:
-            store_plos_to_neo4j(result)
-            status["plos"] = len(result.plos)
-            db.upsert_program(client, {
-                "id": program_id,
-                "name_th": result.faculty_name_th,
-                "faculty": campus,
-            })
-    except Exception as exc:
-        status["errors"].append(f"PLO extraction ({type(exc).__name__}): {exc}")
+    # PLO extraction is run separately via a dedicated command (too slow per-file)
 
     return status
 

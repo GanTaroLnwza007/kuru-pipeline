@@ -2,33 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from sentence_transformers import SentenceTransformer  # used by _get_embed_model return type
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import supabase_client as db
-
-load_dotenv()
-
-_genai_client: genai.Client | None = None
+from kuru.llm import LLM_MODEL, get_client
 
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-base"
-GENERATION_MODEL = "gemini-2.5-flash-lite"
 TOP_K = 5
 MIN_SIMILARITY = 0.35   # chunks below this are too weak to be useful
-
-
-def _get_genai_client() -> genai.Client:
-    global _genai_client
-    if _genai_client is None:
-        _genai_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _genai_client
 
 
 def _get_embed_model() -> SentenceTransformer:
@@ -152,15 +137,15 @@ def _embed_query(query: str) -> list[float]:
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30), retry=retry_if_exception(is_transient_error), reraise=True)
 def _generate(context: str, question: str) -> str:
     prompt = RAG_USER_TEMPLATE.format(context=context, question=question)
-    response = _get_genai_client().models.generate_content(
-        model=GENERATION_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=RAG_SYSTEM_PROMPT,
-            temperature=0.2,
-        ),
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": RAG_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
     )
-    return response.text or "(No response generated)"
+    return response.choices[0].message.content or "(No response generated)"
 
 
 # ─────────────────────────────────────────

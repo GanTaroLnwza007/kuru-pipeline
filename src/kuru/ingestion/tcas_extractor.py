@@ -3,34 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import supabase_client as db
 from kuru.ingestion.text_extractor import extract_text, full_text
 from kuru.ingestion.utils import is_transient_error, safe_print
-
-load_dotenv()
-
-_client: genai.Client | None = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+from kuru.llm import LLM_MODEL, get_client
 
 # Maximum sheets processed per xlsx workbook — guard against runaway API costs.
 MAX_XLSX_SHEETS = 20
@@ -76,15 +59,13 @@ Document text:
 # ─────────────────────────────────────────
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
-def _call_gemini(text: str) -> str:
-    response = _get_client().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.replace("{text}", text[:200000]),
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-        ),
+def _call_llm(text: str) -> str:
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": EXTRACTION_PROMPT.replace("{text}", text[:200000])}],
+        temperature=0.0,
     )
-    return response.text or "[]"
+    return response.choices[0].message.content or "[]"
 
 
 def _parse_records(raw_json: str) -> list[dict[str, Any]]:
@@ -129,7 +110,7 @@ def extract_tcas_from_pdf(
     if verbose:
         safe_print(f"  Extracted {len(doc_text)} chars. Calling Gemini for structured extraction …")
 
-    return _build_records(_parse_records(_call_gemini(doc_text)))
+    return _build_records(_parse_records(_call_llm(doc_text)))
 
 
 def _sheet_to_text(ws: Any) -> str:
@@ -173,7 +154,7 @@ def extract_tcas_from_xlsx(
             safe_print(f"    Sheet '{sheet_name}': {len(text)} chars -> Gemini ...")
 
         sheet_new = 0
-        for rec in _build_records(_parse_records(_call_gemini(text))):
+        for rec in _build_records(_parse_records(_call_llm(text))):
             key = f"{rec.program_name_raw}|{rec.round}"
             if key not in seen:
                 seen.add(key)

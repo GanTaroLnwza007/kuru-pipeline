@@ -1,34 +1,17 @@
-"""Text extractor — PyMuPDF for born-digital PDFs, Gemini Files API for scanned."""
+"""Text extractor — PyMuPDF for born-digital PDFs, vision API for scanned."""
 
 from __future__ import annotations
 
-import os
-import tempfile
-import time
+import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.ingestion.utils import is_transient_error, safe_print
-
-load_dotenv()
-
-_client: genai.Client | None = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+from kuru.llm import LLM_MODEL, get_client
 
 # If PyMuPDF extracts fewer than this many chars total, treat as scanned.
 SCANNED_CHAR_THRESHOLD = 500
@@ -38,7 +21,7 @@ SCANNED_CHAR_THRESHOLD = 500
 class PageText:
     page_num: int
     text: str
-    extraction_method: str  # 'pymupdf' | 'gemini_files' | 'python-docx' | 'failed'
+    extraction_method: str  # 'pymupdf' | 'vision' | 'python-docx' | 'failed'
 
 
 # ─────────────────────────────────────────
@@ -60,14 +43,18 @@ def _extract_pymupdf(pdf_path: Path) -> list[PageText]:
 
 
 # ─────────────────────────────────────────
-# Gemini Files API extraction (scanned / whole-PDF)
+# Vision OCR fallback (scanned / image-only PDFs)
 # ─────────────────────────────────────────
 
-PDF_EXTRACT_PROMPT = (
-    "Extract all text from this PDF document. "
+_PDF_EXTRACT_PROMPT = (
+    "Extract all text from these PDF page images. "
     "Preserve Thai text exactly as written. "
     "Output only the extracted text with no commentary."
 )
+
+_OCR_DPI = 100        # 100 dpi — smaller images, faster upload, still readable Thai text
+_OCR_BATCH_SIZE = 8   # pages per API call — large batches cause Gemini to hallucinate/loop
+_OCR_WORKERS = 3      # parallel batch calls
 
 
 @retry(
@@ -76,55 +63,54 @@ PDF_EXTRACT_PROMPT = (
     retry=retry_if_exception(is_transient_error),
     reraise=True,
 )
-def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
-    """Upload the entire PDF to Gemini Files API and extract text in one call."""
-    client = _get_client()
+def _ocr_batch(images_b64: list[str]) -> str:
+    """Send a batch of base64 PNG pages to the vision model and return extracted text."""
+    content: list[dict] = [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+        for b64 in images_b64
+    ]
+    content.append({"type": "text", "text": _PDF_EXTRACT_PROMPT})
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": content}],
+        temperature=0.0,
+    )
+    return response.choices[0].message.content or ""
 
-    # Write to a temp file with ASCII path — avoids Windows SDK encoding bugs
-    # with Thai characters in file paths.
-    tmp_fd, tmp_name = tempfile.mkstemp(suffix=".pdf")
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(tmp_fd, "wb") as f:
-            f.write(pdf_path.read_bytes())
 
-        if verbose:
-            safe_print(f"  Uploading {pdf_path.name} to Gemini Files API …")
+def _extract_with_vision(pdf_path: Path, verbose: bool = False) -> str:
+    """Render PDF pages in parallel batches to avoid hallucination and reduce total time."""
+    if verbose:
+        safe_print(f"  Rendering {pdf_path.name} for vision OCR …")
 
-        uploaded = client.files.upload(
-            file=tmp_path,
-            config=types.UploadFileConfig(mime_type="application/pdf"),
-        )
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    doc = fitz.open(str(pdf_path))
+    pages_b64 = [
+        base64.b64encode(page.get_pixmap(dpi=_OCR_DPI).tobytes("png")).decode()
+        for page in doc
+    ]
+    doc.close()
 
-    # Wait until the file is ACTIVE (usually immediate)
-    file_ref = uploaded
-    for _ in range(15):
-        if file_ref.state and file_ref.state.name == "ACTIVE":
-            break
-        time.sleep(2)
-        file_ref = client.files.get(name=uploaded.name)
+    batches = [
+        (i, pages_b64[i : i + _OCR_BATCH_SIZE])
+        for i in range(0, len(pages_b64), _OCR_BATCH_SIZE)
+    ]
+    total_pages = len(pages_b64)
 
     if verbose:
-        safe_print("  File active — extracting text …")
+        safe_print(f"  {len(batches)} batches × {_OCR_BATCH_SIZE} pages, {_OCR_WORKERS} workers …")
 
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                types.Part.from_uri(file_uri=file_ref.uri, mime_type="application/pdf"),
-                types.Part.from_text(text=PDF_EXTRACT_PROMPT),
-            ],
-        )
-    finally:
-        # Always clean up uploaded file
-        try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            pass
+    results: dict[int, str] = {}
+    with ThreadPoolExecutor(max_workers=_OCR_WORKERS) as pool:
+        futures = {pool.submit(_ocr_batch, batch): idx for idx, batch in batches}
+        for future in as_completed(futures):
+            idx = futures[future]
+            start_page = idx + 1
+            end_page = min(idx + _OCR_BATCH_SIZE, total_pages)
+            results[idx] = future.result()
+            if verbose:
+                safe_print(f"  ✓ pages {start_page}–{end_page}")
 
-    return response.text or ""
+    return "\n\n".join(results[i] for i, _ in batches)
 
 
 # ─────────────────────────────────────────
@@ -152,10 +138,10 @@ def extract_text(
         safe_print(f"  Low text yield ({total_chars} chars) — using Gemini Files API")
 
     try:
-        text = _extract_with_gemini_files(pdf_path, verbose=verbose)
-        return [PageText(page_num=0, text=text, extraction_method="gemini_files")]
+        text = _extract_with_vision(pdf_path, verbose=verbose)
+        return [PageText(page_num=0, text=text, extraction_method="vision")]
     except Exception as exc:
-        safe_print(f"  Gemini Files extraction failed ({type(exc).__name__}): {exc}")
+        safe_print(f"  Vision OCR failed ({type(exc).__name__}): {exc}")
         return [PageText(page_num=0, text="", extraction_method="failed")]
 
 

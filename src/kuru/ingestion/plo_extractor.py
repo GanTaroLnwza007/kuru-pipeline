@@ -3,33 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import neo4j_client as neo4j
 from kuru.ingestion.text_extractor import extract_text_auto, full_text
 from kuru.ingestion.utils import is_transient_error, safe_print
-
-load_dotenv()
-
-
-_client: genai.Client | None = None
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+from kuru.llm import LLM_MODEL, get_client
 
 
 # ─────────────────────────────────────────
@@ -107,15 +91,13 @@ Document text (first 30,000 characters):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
-def _call_gemini(text: str) -> str:
-    response = _get_client().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.replace("{text}", text[:200000]),
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-        ),
+def _call_llm(text: str) -> str:
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": EXTRACTION_PROMPT.replace("{text}", text[:200000])}],
+        temperature=0.0,
     )
-    return response.text or "{}"
+    return response.choices[0].message.content or "{}"
 
 
 def extract_plos_from_pdf(
@@ -131,7 +113,7 @@ def extract_plos_from_pdf(
     pages = extract_text_auto(pdf_path, use_vision_fallback=True, verbose=verbose)
     doc_text = full_text(pages)
 
-    raw_json = _call_gemini(doc_text)
+    raw_json = _call_llm(doc_text)
     cleaned = re.sub(r"```(?:json)?|```", "", raw_json).strip()
 
     try:
