@@ -78,6 +78,16 @@ def _ocr_batch(images_b64: list[str]) -> str:
     return response.choices[0].message.content or ""
 
 
+def _dedup_lines(text: str) -> str:
+    """Remove consecutive duplicate lines produced by repeated page stamps in scanned PDFs."""
+    lines = text.splitlines()
+    result: list[str] = []
+    for line in lines:
+        if not result or line.strip() != result[-1].strip():
+            result.append(line)
+    return "\n".join(result)
+
+
 def _extract_with_vision(pdf_path: Path, verbose: bool = False) -> str:
     """Render PDF pages in parallel batches to avoid hallucination and reduce total time."""
     if verbose:
@@ -106,11 +116,19 @@ def _extract_with_vision(pdf_path: Path, verbose: bool = False) -> str:
             idx = futures[future]
             start_page = idx + 1
             end_page = min(idx + _OCR_BATCH_SIZE, total_pages)
-            results[idx] = future.result()
+            results[idx] = _dedup_lines(future.result())
             if verbose:
                 safe_print(f"  ✓ pages {start_page}–{end_page}")
 
     return "\n\n".join(results[i] for i, _ in batches)
+
+
+def render_page_b64(pdf_path: Path, page_num: int, dpi: int = 150) -> str:
+    """Render a single PDF page to a base64 PNG string."""
+    doc = fitz.open(str(pdf_path))
+    pix = doc[page_num].get_pixmap(dpi=dpi)
+    doc.close()
+    return base64.b64encode(pix.tobytes("png")).decode()
 
 
 # ─────────────────────────────────────────
