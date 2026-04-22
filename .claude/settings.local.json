@@ -11,7 +11,16 @@
       "Bash(uv sync:*)",
       "Bash(uv run:*)",
       "Bash(git *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "WebFetch(domain:registrar.ku.ac.th)",
+      "Bash(xargs ls *)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(tasklist)",
+      "Bash(taskkill *)",
+      "Bash(cmd *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(echo \"exit $?\")",
+      "Bash(PYTHONUTF8=1 uv run python -)"
     ]
   }
 }
