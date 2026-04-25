@@ -20,7 +20,9 @@
       "Bash(cmd *)",
       "Bash(echo \"Exit: $?\")",
       "Bash(echo \"exit $?\")",
-      "Bash(PYTHONUTF8=1 uv run python -)"
+      "Bash(PYTHONUTF8=1 uv run python -)",
+      "Bash(PYTHONUTF8=1 uv run *)",
+      "Bash(echo \"Started PID $!\")"
     ]
   }
 }

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import supabase_client as db
@@ -33,6 +33,15 @@ class TCASRecord(BaseModel):
     portfolio_requirements: dict[str, Any] | None = Field(default=None)
     deadlines: dict[str, Any] | None = Field(default=None)
 
+    @field_validator("gpax_min")
+    @classmethod
+    def _gpax_must_be_on_4_scale(cls, v: float | None) -> float | None:
+        # GPAX is 0.0–4.0. Values > 4.0 mean the extractor confused a score weight
+        # percentage (e.g. "GPAX 20%") with the minimum GPA — discard them.
+        if v is not None and v > 4.0:
+            return None
+        return v
+
 
 EXTRACTION_PROMPT = """You are a structured data extractor for Thai university admission documents.
 
@@ -42,8 +51,8 @@ Return a JSON array where each element is an admission record with these fields:
 - faculty: faculty/department name
 - round: "round1", "round2", "round3", or "round4"
 - quota: number of available seats (integer, null if not found)
-- gpax_min: minimum GPAX requirement (float, null if not found)
-- exam_criteria: object with exam names as keys, e.g. {"TGAT": {"weight": 0.3}, "TPAT3": {"weight": 0.7}}
+- gpax_min: minimum cumulative GPA (GPAX) on a 4.0 scale (e.g. 2.75, 3.00, 3.25). Must be between 0.0 and 4.0. If GPAX appears as a score weight percentage (e.g. "GPAX 20%"), that is a weight — NOT a minimum GPA, leave null.
+- exam_criteria: object with exam names as keys and percentage weights (0–100), e.g. {"TGAT": {"weight": 30}, "TPAT3": {"weight": 70}}
 - portfolio_requirements: object describing portfolio items required
 - deadlines: object with date keys, e.g. {"apply_start": "2025-10-01", "apply_end": "2025-10-10"}
 

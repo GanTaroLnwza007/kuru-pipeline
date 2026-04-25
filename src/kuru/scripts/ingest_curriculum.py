@@ -6,6 +6,8 @@ import hashlib
 import math
 import re
 import sys
+import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -52,6 +54,44 @@ def _program_id_from_path(pdf_path: Path, campus: str) -> str:
     return f"{campus_slug}_{name_part}"
 
 
+_CURRICULUM_MARKERS = re.compile(
+    r"มคอ\.?\s*2|หลักสูตร|สาขาวิชา|ปริญญา|curriculum|programme|program",
+    re.IGNORECASE,
+)
+
+# PDFs whose filename announces that the program was officially closed.
+_CLOSED_RE = re.compile(r"ปิดหลักสูตร|สภาฯ.{0,10}อนุมัติปิด")
+
+_DEGREE_YEAR_RE = re.compile(r"_\d{4}(?:_\d+)*$")
+
+_EN_NAME_RE = re.compile(
+    r"(?:Bachelor|Master|Doctor)\s+of\s+[\w\s,\-]+?Program\s+in\s+[^\n\r]{5,80}",
+    re.IGNORECASE,
+)
+
+def _is_curriculum_doc(text: str) -> bool:
+    """Return False if the extracted text doesn't look like a มคอ.2 curriculum document."""
+    return bool(_CURRICULUM_MARKERS.search(text[:3000]))
+
+
+def _program_name_from_stem(stem: str) -> str:
+    """Human-readable Thai name from a PDF stem, e.g. 'วท.บ._วนศาสตร์_2567' → 'วท.บ. วนศาสตร์'."""
+    return _DEGREE_YEAR_RE.sub("", stem).replace("_", " ").strip()
+
+
+def _degree_level(stem: str) -> str:
+    if "ปร.ด" in stem or "Ph.D" in stem:
+        return "doctoral"
+    if any(x in stem for x in ("วท.ม", "ศศ.ม", "บธ.ม", "วศ.ม", "ผ.ม", "M.S.", "M.B.A")):
+        return "master"
+    return "bachelor"
+
+
+def _extract_name_en(doc_text: str) -> str | None:
+    m = _EN_NAME_RE.search(doc_text[:5000])
+    return m.group(0).strip()[:150] if m else None
+
+
 def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
     """Full pipeline for one curriculum document (PDF or DOCX). Returns a status dict."""
     program_id = _program_id_from_path(pdf_path, campus)
@@ -67,6 +107,16 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
 
     client = db.get_client()
 
+    # Always upsert the program row with proper name/degree — runs even on skip
+    # so re-running the ingest backfills existing records.
+    name_th = _program_name_from_stem(pdf_path.stem)
+    db.upsert_program(client, {
+        "id": program_id,
+        "name_th": name_th,
+        "faculty": campus,
+        "degree_level": _degree_level(pdf_path.stem),
+    })
+
     # ── Resume: skip if already fully ingested ──────────────────────────────
     existing = db.count_chunks(client, pdf_path.name)
     if existing > 0:
@@ -74,14 +124,23 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
         status["skipped"] = True
         return status
 
-    db.upsert_program(client, {"id": program_id, "name_th": program_id, "faculty": campus})
-
     # ── Text extraction ─────────────────────────────────────────────────────
     try:
         pages = extract_text_auto(pdf_path, use_vision_fallback=True, verbose=verbose)
         doc_text = full_text(pages)
     except Exception as exc:
         status["errors"].append(f"text extraction ({type(exc).__name__}): {exc}")
+        return status
+
+    # Backfill English program name from OCR text when found.
+    name_en = _extract_name_en(doc_text)
+    if name_en:
+        db.upsert_program(client, {"id": program_id, "name_en": name_en})
+
+    # ── Curriculum check — skip MOUs, agreements, announcements ────────────
+    if not _is_curriculum_doc(doc_text):
+        status["skipped"] = True
+        status["errors"].append("not a curriculum doc (no มคอ.2 markers) — skipped")
         return status
 
     # ── Chunking ────────────────────────────────────────────────────────────
@@ -110,6 +169,12 @@ def find_documents(base_dir: Path, campus: str) -> list[Path]:
         p for p in base_dir.rglob("*")
         if p.suffix.lower() in {".pdf", ".docx"}
     )
+    # Drop officially-closed programs — their content is outdated and misleads retrieval.
+    closed = [p for p in all_docs if _CLOSED_RE.search(p.name)]
+    if closed:
+        console.print(f"[dim]Skipping {len(closed)} closed-program file(s) (ปิดหลักสูตร)[/dim]")
+    all_docs = [p for p in all_docs if not _CLOSED_RE.search(p.name)]
+
     matches = [p for p in all_docs if campus in str(p)]
     if matches:
         return matches
@@ -188,8 +253,23 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
     completed = 0
     console.print(f"[dim]Running {FILE_WORKERS} files in parallel …[/dim]\n")
 
-    with ThreadPoolExecutor(max_workers=FILE_WORKERS) as pool:
-        futures = {pool.submit(ingest_document, pdf, campus, False): pdf for pdf in docs}
+    # Background heartbeat — prints every 30s so the terminal doesn't look frozen.
+    _start = time.time()
+    _stop_heartbeat = threading.Event()
+
+    def _heartbeat():
+        while not _stop_heartbeat.wait(30):
+            elapsed = int(time.time() - _start)
+            m, s = divmod(elapsed, 60)
+            in_flight = min(FILE_WORKERS, len(docs) - completed)
+            console.print(f"  [dim]... still running — {m:02d}:{s:02d} elapsed, {completed}/{len(docs)} done[/dim]")
+
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
+
+    pool = ThreadPoolExecutor(max_workers=FILE_WORKERS)
+    futures = {pool.submit(ingest_document, pdf, campus, False): pdf for pdf in docs}
+    try:
         for future in as_completed(futures):
             status = future.result()
             results.append(status)
@@ -201,6 +281,16 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
                 f"  {tag} [{completed}/{len(docs)}] {status['file'][:55]}"
                 + (f" → chunks={status['chunks']}" if not status["skipped"] else "")
             )
+    except KeyboardInterrupt:
+        _stop_heartbeat.set()
+        console.print("\n[yellow]Interrupted — cancelling queued files …[/yellow]")
+        for f in futures:
+            f.cancel()
+        pool.shutdown(wait=False)
+        console.print(f"[yellow]Stopped at {completed}/{len(docs)} files. Re-run to resume.[/yellow]")
+        import os; os._exit(0)
+
+    _stop_heartbeat.set()
 
     # ── Summary ─────────────────────────────────────────────────────────────
     console.print("\n[bold]Ingestion Summary[/bold]")

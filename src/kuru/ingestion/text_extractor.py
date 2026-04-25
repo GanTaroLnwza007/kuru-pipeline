@@ -78,12 +78,24 @@ def _ocr_batch(images_b64: list[str]) -> str:
     return response.choices[0].message.content or ""
 
 
+def _is_garbage_line(line: str) -> bool:
+    """Return True for OCR hallucination lines — a single character repeated (e.g. า า า า or 7777)."""
+    chars = [c for c in line if not c.isspace()]
+    if len(chars) < 10:
+        return False
+    dominant = max(set(chars), key=chars.count)
+    return chars.count(dominant) / len(chars) > 0.85
+
+
 def _dedup_lines(text: str) -> str:
-    """Remove consecutive duplicate lines produced by repeated page stamps in scanned PDFs."""
+    """Remove consecutive duplicate lines and OCR hallucination lines (single-char repeats)."""
     lines = text.splitlines()
     result: list[str] = []
     for line in lines:
-        if not result or line.strip() != result[-1].strip():
+        stripped = line.strip()
+        if stripped and _is_garbage_line(stripped):
+            continue
+        if not result or stripped != result[-1].strip():
             result.append(line)
     return "\n".join(result)
 
@@ -120,7 +132,17 @@ def _extract_with_vision(pdf_path: Path, verbose: bool = False) -> str:
             if verbose:
                 safe_print(f"  ✓ pages {start_page}–{end_page}")
 
-    return "\n\n".join(results[i] for i, _ in batches)
+    # Cross-batch dedup: if Gemini got stuck in a loop, every batch returns the same text.
+    # Drop duplicate batch outputs so a 50-page PDF doesn't become 50 copies of 2 lines.
+    seen_batch_texts: set[str] = set()
+    for idx in sorted(results.keys()):
+        normalized = results[idx].strip()
+        if normalized in seen_batch_texts:
+            results[idx] = ""
+        elif normalized:
+            seen_batch_texts.add(normalized)
+
+    return "\n\n".join(results[i] for i, _ in batches if results.get(i, "").strip())
 
 
 def render_page_b64(pdf_path: Path, page_num: int, dpi: int = 150) -> str:

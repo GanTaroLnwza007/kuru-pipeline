@@ -32,9 +32,11 @@ TCAS_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
-# Keywords that signal a broad "list all programs" type question
+# Keywords that signal a broad "list all programs" type question.
+# Deliberately narrow — "what courses will I take in X" must NOT match here.
 LISTING_KEYWORDS = re.compile(
-    r"what programs|what majors|what faculties|what courses|available programs|list.*program|programs.*available"
+    r"what programs are|what programs does|which programs|what majors|what faculties"
+    r"|available programs|list.*program|programs.*available"
     r"|หลักสูตรอะไรบ้าง|มีหลักสูตรอะไร|สาขาวิชาอะไรบ้าง|คณะอะไรบ้าง|มีคณะอะไร|เรียนอะไรได้บ้าง"
     r"|มีสาขาอะไร|สาขาใดบ้าง|มีอะไรบ้าง",
     re.IGNORECASE,
