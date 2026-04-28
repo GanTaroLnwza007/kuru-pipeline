@@ -22,7 +22,13 @@
       "Bash(echo \"exit $?\")",
       "Bash(PYTHONUTF8=1 uv run python -)",
       "Bash(PYTHONUTF8=1 uv run *)",
-      "Bash(echo \"Started PID $!\")"
+      "Bash(echo \"Started PID $!\")",
+      "Bash(grep -v \"^$\")",
+      "Bash(where tesseract *)",
+      "PowerShell(Stop-Process *)",
+      "Bash(grep -E \"\\\\.py$|^d\")",
+      "WebFetch(domain:docs.opentyphoon.ai)",
+      "WebFetch(domain:opentyphoon.ai)"
     ]
   }
 }

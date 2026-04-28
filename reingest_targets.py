@@ -21,20 +21,13 @@ console = Console(legacy_windows=False)
 
 CAMPUS = "บางเขน"
 TARGET_FILES = [
-    "ปร.ด._นิเทศศาสตร์ดิจิทัล_2568.pdf",
-    "วท.บ._วนศาสตร์_2567.pdf",
-    "ปร.ด._นวัตกรรมสิ่งแวดล้อมสรรค์สร้าง_2565.pdf",
-    "บธ.บ._การตลาด_(นานาชาติ)_2568.pdf",
-    "ปร.ด._วิศวกรรมคอมพิวเตอร์_2566.pdf",
-    "ปร.ด._วิทยาศาสตร์สิ่งแวดล้อม_2564.pdf",
-    "ปร.ด._วนศาสตร์_(นานาชาติ)_2569.pdf",
-    "ปร.ด._วิศวกรรมทรัพยากรน้ำ_2564.pdf",
-    "ปร.ด._วิศวกรรมวัสดุ_2569.pdf",
-    "ปร.ด._การท่องเที่ยวและการบริการร่วมสมัยอย่างยั่งยืน_2569.pdf",
-    "พ.บ._2567.pdf",
-    "ภ.บ._2569.pdf",
-    "(เดิม_วท.ม._ศาสตร์แห่งแผ่นดินเพื่อการพัฒนาที่ยั่งยืน)_2564.pdf",
-    "วท.ม._บูรณาการศาสตร์เพื่อการพัฒนาที่ยั่งยืน_2569.pdf",
+    # SAMPLE BATCH — validating google/gemini-2.5-flash as OCR model.
+    # Set $env:OCR_MODEL="google/gemini-2.5-flash" before running.
+    # Pass criteria: each file produces 200-2500 chunks (NOT thousands of duplicates),
+    # no TypeError, no "0 chars" warnings.
+    "วท.บ._วนศาสตร์_2567.pdf",                  # was EMPTY (0 chunks)
+    "ปร.ด._วิศวกรรมคอมพิวเตอร์_2566.pdf",       # was SUSPECT (308 chunks, า า า า hallucination)
+    "ภ.บ._2569.pdf",                              # was FAIL (4,695 bloated chunks)
 ]
 
 base_dir = Path("data/raw/curriculum")

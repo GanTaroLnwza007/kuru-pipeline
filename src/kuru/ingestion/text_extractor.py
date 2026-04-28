@@ -11,7 +11,7 @@ import fitz  # PyMuPDF
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.ingestion.utils import is_transient_error, safe_print
-from kuru.llm import LLM_MODEL, get_client
+from kuru.llm import OCR_MODEL, get_client
 
 # If PyMuPDF extracts fewer than this many chars total, treat as scanned.
 SCANNED_CHAR_THRESHOLD = 500
@@ -52,8 +52,8 @@ _PDF_EXTRACT_PROMPT = (
     "Output only the extracted text with no commentary."
 )
 
-_OCR_DPI = 100        # 100 dpi — smaller images, faster upload, still readable Thai text
-_OCR_BATCH_SIZE = 8   # pages per API call — large batches cause Gemini to hallucinate/loop
+_OCR_DPI = 150        # 150 dpi — better quality for poor scans without huge token cost
+_OCR_BATCH_SIZE = 4   # pages per API call — smaller batches reduce hallucination loops
 _OCR_WORKERS = 3      # parallel batch calls
 
 
@@ -71,10 +71,13 @@ def _ocr_batch(images_b64: list[str]) -> str:
     ]
     content.append({"type": "text", "text": _PDF_EXTRACT_PROMPT})
     response = get_client().chat.completions.create(
-        model=LLM_MODEL,
+        model=OCR_MODEL,
         messages=[{"role": "user", "content": content}],
         temperature=0.0,
     )
+    # choices can be None on certain Gemini error responses
+    if not response.choices:
+        return ""
     return response.choices[0].message.content or ""
 
 
@@ -145,6 +148,44 @@ def _extract_with_vision(pdf_path: Path, verbose: bool = False) -> str:
     return "\n\n".join(results[i] for i, _ in batches if results.get(i, "").strip())
 
 
+def _extract_with_tesseract(pdf_path: Path, verbose: bool = False) -> str:
+    """Last-resort OCR using Tesseract when Gemini returns empty/garbage.
+
+    Requires: `uv add pytesseract` + Tesseract binary with Thai language data installed.
+    If either is missing, logs a warning and returns "" — never crashes the ingest.
+    """
+    try:
+        import pytesseract
+        from PIL import Image  # noqa: PLC0415
+    except ImportError:
+        safe_print("  [tesseract] pytesseract not installed — skipping fallback (uv add pytesseract)")
+        return ""
+
+    if verbose:
+        safe_print(f"  [tesseract] Falling back to Tesseract for {pdf_path.name} …")
+
+    try:
+        doc = fitz.open(str(pdf_path))
+        parts: list[str] = []
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(dpi=_OCR_DPI)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            text = pytesseract.image_to_string(img, lang="tha+eng", timeout=60)
+            text = _dedup_lines(text)
+            if text.strip():
+                parts.append(text)
+            if verbose:
+                safe_print(f"  [tesseract] ✓ page {i + 1}/{len(doc)}")
+        doc.close()
+        result = "\n\n".join(parts)
+        if verbose:
+            safe_print(f"  [tesseract] {len(result)} chars extracted")
+        return result
+    except Exception as exc:
+        safe_print(f"  [tesseract] failed ({type(exc).__name__}): {exc}")
+        return ""
+
+
 def render_page_b64(pdf_path: Path, page_num: int, dpi: int = 150) -> str:
     """Render a single PDF page to a base64 PNG string."""
     doc = fitz.open(str(pdf_path))
@@ -179,9 +220,15 @@ def extract_text(
 
     try:
         text = _extract_with_vision(pdf_path, verbose=verbose)
+        if len(text.strip()) < SCANNED_CHAR_THRESHOLD:
+            safe_print(f"  Vision OCR yielded only {len(text.strip())} chars — trying Tesseract fallback")
+            text = _extract_with_tesseract(pdf_path, verbose=verbose)
         return [PageText(page_num=0, text=text, extraction_method="vision")]
     except Exception as exc:
         safe_print(f"  Vision OCR failed ({type(exc).__name__}): {exc}")
+        text = _extract_with_tesseract(pdf_path, verbose=verbose)
+        if text.strip():
+            return [PageText(page_num=0, text=text, extraction_method="vision")]
         return [PageText(page_num=0, text="", extraction_method="failed")]
 
 

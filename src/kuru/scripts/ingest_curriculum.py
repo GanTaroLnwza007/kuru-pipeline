@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 import sys
 import threading
@@ -314,6 +315,31 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
         f"\n[bold]Done.[/bold] {len(done)} ingested, "
         f"{len(skipped)} skipped, {len(failed)} failed."
     )
+
+    # Refresh planner stats so pgvector queries use the index instead of seq-scanning.
+    # Without this, queries time out after a bulk ingest until VACUUM runs.
+    if done:
+        _vacuum_chunks()
+
+
+def _vacuum_chunks() -> None:
+    """Run VACUUM ANALYZE chunks to refresh pgvector planner stats after bulk insert."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        console.print("[yellow]DATABASE_URL not set — skipping post-ingest VACUUM ANALYZE[/yellow]")
+        return
+    try:
+        import psycopg2  # noqa: PLC0415
+        console.print("\n[dim]Running VACUUM ANALYZE chunks …[/dim]")
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 0;")
+            cur.execute("VACUUM ANALYZE chunks;")
+        conn.close()
+        console.print("[dim]VACUUM done.[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]VACUUM failed ({type(exc).__name__}): {exc}[/yellow]")
 
 
 if __name__ == "__main__":

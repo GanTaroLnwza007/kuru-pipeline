@@ -8,10 +8,10 @@ Last updated: 2026-04-25
 
 | Item | Count |
 |------|-------|
-| Total programs in DB | 56 |
-| Programs with chunks | 37 |
-| Programs pending re-ingest | 13 |
-| Total chunks in DB | ~75,000 |
+| Total programs in DB | 48 |
+| Programs with chunks | 46 |
+| Programs with 0 chunks (OCR failed) | 2 |
+| Total chunks in DB | ~95,938 |
 | TCAS records | 2,524 |
 
 ---
@@ -53,30 +53,62 @@ Last updated: 2026-04-25
 
 ---
 
-## Pending: 13 Programs to Re-ingest
+## OCR Failure Analysis & Options
 
-These were cleared from DB and need to be re-processed with the fixed OCR code.
-Run `reingest_targets.py` as a **single process** (no background `&`):
+### Root Cause
+
+Two forestry PDFs (`วท.บ._วนศาสตร์_2567.pdf`, `ปร.ด._วนศาสตร์_(นานาชาติ)_2569.pdf`) produced 0
+chunks after re-ingest. The OCR pipeline has two aggressive filters that compound:
+
+1. **`_is_garbage_line()`** — drops any line where >85% of non-space chars are the same character.
+2. **Cross-batch dedup** — if Gemini hallucinates the same content for every 8-page batch, only
+   the first batch survives.
+
+For very poor quality scans, Gemini hallucinates garbage repeatedly → cross-batch dedup kills all
+but one batch → garbage filter kills that batch → empty string → 0 chunks. Neither filter alone
+causes this; it's the combination.
+
+### Options (ranked by effort)
+
+| # | Option | Effort | Status |
+|---|--------|--------|--------|
+| 1 | **Higher DPI + smaller batch** — 100→150 DPI, 8→4 pages/batch. Bigger images give the model more detail; smaller batches reduce hallucination loops. | Low — 2-line change | **Implemented** |
+| 2 | **Stronger Gemini model** — `gemini-2.5-flash` (full) instead of `flash-lite` for files that return empty. Better OCR on poor scans. | Low — per-file model override | Deferred |
+| 3 | **Tesseract local fallback** — when Gemini vision returns < 500 chars after filtering, fall through to Tesseract with Thai language pack (`tha+eng`). Free, local, no quota, no hallucination. | Medium — add pytesseract dep + function | **Implemented** |
+| 4 | **Smarter cross-batch dedup** — replace exact string match with edit-distance similarity so slightly-different-garbage batches each survive one copy. | Medium — more complex logic | Deferred |
+| 5 | **Google Document AI / Azure Document Intelligence** — purpose-built document OCR with Thai support. Best quality but costs ~$1.50/1000 pages and requires API setup. | High | Deferred — consider if Tesseract still fails |
+
+### Setup Required for Tesseract (Option 3)
+
+Tesseract binary must be installed separately from the Python package:
+
+```powershell
+# Windows — download installer from https://github.com/UB-Mannheim/tesseract/wiki
+# Make sure to tick "Thai" language data during install
+# Default install path: C:\Program Files\Tesseract-OCR\tesseract.exe
+
+# Then install Python wrapper
+uv add pytesseract
+```
+
+If Tesseract binary is not found, the fallback logs a warning and returns empty — it never crashes
+the ingest. Re-ingest the failed files after installing:
 
 ```powershell
 $env:PYTHONUTF8=1; uv run python reingest_targets.py
 ```
 
+---
+
+## Pending: 2 Programs Still at 0 Chunks (OCR failed)
+
+These produced 0 chunks after re-ingest — Gemini OCR returned empty after garbage/dedup filtering.
+Re-ingest after installing Tesseract (see above) — the Tesseract fallback will catch them.
+
 | Program | File | Failure mode |
 |---------|------|-------------|
-| ปร.ด. นิเทศศาสตร์ดิจิทัล | ปร.ด._นิเทศศาสตร์ดิจิทัล_2568.pdf | garbage 30/30 + identical 97% |
-| วท.บ. วนศาสตร์ | วท.บ._วนศาสตร์_2567.pdf | garbage 27/30 + identical 90% |
-| บธ.บ. การตลาด (นานาชาติ) | บธ.บ._การตลาด_(นานาชาติ)_2568.pdf | identical 97% (cross-batch repeat) |
-| ปร.ด. วิศวกรรมคอมพิวเตอร์ | ปร.ด._วิศวกรรมคอมพิวเตอร์_2566.pdf | า า า า า hallucination |
-| ปร.ด. วิทยาศาสตร์สิ่งแวดล้อม | ปร.ด._วิทยาศาสตร์สิ่งแวดล้อม_2564.pdf | identical 77% |
-| ปร.ด. วนศาสตร์ (นานาชาติ) | ปร.ด._วนศาสตร์_(นานาชาติ)_2569.pdf | garbage 30/30 + identical 97% |
-| ปร.ด. วิศวกรรมทรัพยากรน้ำ | ปร.ด._วิศวกรรมทรัพยากรน้ำ_2564.pdf | identical 97% |
-| ปร.ด. วิศวกรรมวัสดุ | ปร.ด._วิศวกรรมวัสดุ_2569.pdf | identical 97% |
-| ปร.ด. การท่องเที่ยวฯ | ปร.ด._การท่องเที่ยวและการบริการร่วมสมัยอย่างยั่งยืน_2569.pdf | garbage 3/30 + identical 77% |
-| พ.บ. | พ.บ._2567.pdf | identical 93% |
-| ภ.บ. | ภ.บ._2569.pdf | garbage 30/30 + identical 93% |
-| (เดิม) วท.ม. ศาสตร์แห่งแผ่นดิน | (เดิม_วท.ม._ศาสตร์แห่งแผ่นดินเพื่อการพัฒนาที่ยั่งยืน)_2564.pdf | garbage 30/30 + identical 97% |
-| วท.ม. บูรณาการศาสตร์ | วท.ม._บูรณาการศาสตร์เพื่อการพัฒนาที่ยั่งยืน_2569.pdf | garbage 2/30 + identical 80% |
+| วท.บ. วนศาสตร์ | วท.บ._วนศาสตร์_2567.pdf | garbage + cross-batch dedup → empty |
+| ปร.ด. วนศาสตร์ (นานาชาติ) | ปร.ด._วนศาสตร์_(นานาชาติ)_2569.pdf | garbage + cross-batch dedup → empty |
 
 ---
 
