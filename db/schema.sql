@@ -8,12 +8,18 @@ create extension if not exists vector;
 -- Programs registry (canonical source of truth)
 -- ─────────────────────────────────────────
 create table if not exists programs (
-  id           text primary key,          -- e.g. 'ku-cpe', 'ku-cs', derived from filename
-  name_th      text,
-  name_en      text,
-  faculty      text,
-  degree_level text default 'bachelor',
-  created_at   timestamptz default now()
+  id                  text primary key,          -- e.g. 'ku-cpe', 'ku-cs', derived from filename
+  name_th             text,
+  name_en             text,
+  faculty             text,
+  degree_level        text default 'bachelor',
+  overview            text,
+  plos                jsonb default '[]',
+  courses             jsonb default '[]',
+  year_timeline       jsonb default '[]',
+  curriculum_mapping  jsonb default '[]',
+  coverage            jsonb default '{}',
+  created_at          timestamptz default now()
 );
 
 -- ─────────────────────────────────────────
@@ -64,6 +70,16 @@ create table if not exists tcas_records (
 
 create index if not exists tcas_records_program_id_idx on tcas_records (program_id);
 create index if not exists tcas_records_round_idx on tcas_records (round);
+
+-- ─────────────────────────────────────────
+-- Idempotent column additions for upgrades
+-- ─────────────────────────────────────────
+alter table programs add column if not exists overview            text;
+alter table programs add column if not exists plos               jsonb default '[]';
+alter table programs add column if not exists courses            jsonb default '[]';
+alter table programs add column if not exists year_timeline      jsonb default '[]';
+alter table programs add column if not exists curriculum_mapping jsonb default '[]';
+alter table programs add column if not exists coverage           jsonb default '{}';
 
 -- ─────────────────────────────────────────
 -- pgvector similarity search RPC function
