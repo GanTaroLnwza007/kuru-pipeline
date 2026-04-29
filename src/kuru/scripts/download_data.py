@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
 import gdown
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 TCAS1_FOLDER_ID      = "1-iOHS3P-iST3Fvbci3xjchcvY2rw8jpi"
 CURRICULUM_FOLDER_ID = "1zmvMNmCYyzxLHjJWfHfqH0Yzoa6ZDYWC"
