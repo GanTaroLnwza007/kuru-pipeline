@@ -33,6 +33,7 @@ kuru-ingest-mko = "kuru.scripts.ingest_curriculum:main"
 kuru-ingest-tcas = "kuru.scripts.ingest_tcas:main"
 kuru-demo       = "kuru.scripts.demo_rag:main"
 kuru-scrape-curriculum = "kuru.scripts.scrape_curriculum:main"
+kuru-coverage          = "kuru.scripts.coverage_report:main"
 
 [build-system]
 requires = ["hatchling"]
