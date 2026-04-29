@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Chat / answer-generation model — cheap and fast.
-LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-2.5-flash-lite-preview-06-17")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-2.5-flash-lite")
 
 # Vision OCR model — gemini-2.5-flash via native SDK (thinking disabled = no cost blowup).
 # Set OCR_MODEL=typhoon-ocr to use Typhoon instead (requires TYPHOON_API_KEY).
