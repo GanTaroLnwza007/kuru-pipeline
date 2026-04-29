@@ -28,7 +28,8 @@
       "PowerShell(Stop-Process *)",
       "Bash(grep -E \"\\\\.py$|^d\")",
       "WebFetch(domain:docs.opentyphoon.ai)",
-      "WebFetch(domain:opentyphoon.ai)"
+      "WebFetch(domain:opentyphoon.ai)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import struct
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,7 @@ import fitz  # PyMuPDF
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.ingestion.utils import is_transient_error, safe_print
-from kuru.llm import OCR_MODEL, get_client
+from kuru.llm import OCR_MODEL, get_gemini_client, get_ocr_client
 
 # If PyMuPDF extracts fewer than this many chars total, treat as scanned.
 SCANNED_CHAR_THRESHOLD = 500
@@ -52,30 +53,76 @@ _PDF_EXTRACT_PROMPT = (
     "Output only the extracted text with no commentary."
 )
 
-_OCR_DPI = 150        # 150 dpi — better quality for poor scans without huge token cost
-_OCR_BATCH_SIZE = 4   # pages per API call — smaller batches reduce hallucination loops
-_OCR_WORKERS = 3      # parallel batch calls
+_OCR_DPI = 96         # 96 dpi — good enough for OCR, ~2.5x fewer image tokens than 150
+# Typhoon is designed for 1 page at a time; Gemini handles 4 efficiently.
+_OCR_BATCH_SIZE = 1 if OCR_MODEL.startswith("typhoon") else 4
+_OCR_WORKERS = 2      # parallel batch calls — 2 keeps Typhoon under 20 req/min limit
+
+
+def _png_dimensions(b64: str) -> tuple[int, int]:
+    """Extract width, height from a base64 PNG without full decode (reads 24 bytes)."""
+    raw = base64.b64decode(b64[:64])  # first 64 chars covers the 24-byte PNG header
+    w = struct.unpack(">I", raw[16:20])[0]
+    h = struct.unpack(">I", raw[20:24])[0]
+    return w, h
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=2, min=15, max=120),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=30, max=300),
     retry=retry_if_exception(is_transient_error),
     reraise=True,
 )
 def _ocr_batch(images_b64: list[str]) -> str:
     """Send a batch of base64 PNG pages to the vision model and return extracted text."""
-    content: list[dict] = [
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+    if OCR_MODEL.startswith("typhoon"):
+        return _ocr_batch_typhoon(images_b64)
+    return _ocr_batch_gemini(images_b64)
+
+
+def _ocr_batch_gemini(images_b64: list[str]) -> str:
+    """Gemini OCR via native google-genai SDK — thinking disabled to avoid cost blowup."""
+    from google import genai  # noqa: PLC0415
+    from google.genai import types  # noqa: PLC0415
+
+    parts = [
+        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
         for b64 in images_b64
     ]
-    content.append({"type": "text", "text": _PDF_EXTRACT_PROMPT})
-    response = get_client().chat.completions.create(
+    parts.append(types.Part.from_text(text=_PDF_EXTRACT_PROMPT))
+
+    response = get_gemini_client().models.generate_content(
         model=OCR_MODEL,
-        messages=[{"role": "user", "content": content}],
-        temperature=0.0,
+        contents=parts,
+        config=types.GenerateContentConfig(
+            temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
     )
-    # choices can be None on certain Gemini error responses
+    return response.text or ""
+
+
+def _ocr_batch_typhoon(images_b64: list[str]) -> str:
+    """Typhoon OCR via OpenAI-compatible API — 1 page per call with dimension prompt."""
+    b64 = images_b64[0]
+    w, h = _png_dimensions(b64)
+    prompt = (
+        f"Below is an image of a document page along with its dimensions. "
+        f"The image dimensions are {w}x{h} pixels. "
+        "Extract all text from this page. Preserve Thai text exactly as written. "
+        "Output only the extracted text with no commentary."
+    )
+    response = get_ocr_client().chat.completions.create(
+        model=OCR_MODEL,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ]}],
+        temperature=0.1,
+        max_tokens=16384,
+        top_p=0.6,
+        extra_body={"repetition_penalty": 1.2},
+    )
     if not response.choices:
         return ""
     return response.choices[0].message.content or ""
