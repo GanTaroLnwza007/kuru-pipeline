@@ -22,6 +22,11 @@ def upsert_program(client: Client, program: dict[str, Any]) -> None:
     client.table("programs").upsert(program).execute()
 
 
+def update_program_structured(client: Client, program_id: str, data: dict[str, Any]) -> None:
+    """Update structured JSONB fields on an existing program record."""
+    client.table("programs").update(data).eq("id", program_id).execute()
+
+
 def upsert_chunks(client: Client, chunks: list[dict[str, Any]]) -> None:
     """Batch-upsert chunk rows (with embeddings) into the chunks table."""
     if not chunks:

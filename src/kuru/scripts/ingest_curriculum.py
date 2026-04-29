@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import math
 import os
@@ -22,7 +23,8 @@ from rich.console import Console
 from kuru.db import supabase_client as db
 from kuru.ingestion.chunker import chunk_document
 from kuru.ingestion.embedder import embed_and_store, _get_model
-from kuru.ingestion.text_extractor import extract_text_auto, full_text
+from kuru.ingestion.structured_extractor import StructuredProgram, extract_structured
+from kuru.ingestion.text_extractor import PageText, extract_text_auto, full_text
 
 load_dotenv()
 
@@ -40,8 +42,7 @@ def _program_id_from_path(pdf_path: Path, campus: str) -> str:
     }.get(campus, re.sub(r"\s+", "_", campus).lower())
 
     # Use the faculty subfolder (e.g. "eng", "agri") as a stable prefix.
-    # The scraper places files under data/raw/curriculum/<campus>/<faculty>/<file>.
-    campus_dir = Path("data/raw/curriculum") / campus
+    campus_dir = Path("data/native/curriculum") / campus
     try:
         rel = pdf_path.relative_to(campus_dir)
         faculty_part = rel.parts[0] if len(rel.parts) > 1 else ""
@@ -93,7 +94,53 @@ def _extract_name_en(doc_text: str) -> str | None:
     return m.group(0).strip()[:150] if m else None
 
 
-def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
+def _load_name_mapping() -> dict[str, dict]:
+    """Load data/program_name_mapping.csv → {program_id: {name_en, name_th_canonical}}."""
+    csv_path = Path("data/program_name_mapping.csv")
+    if not csv_path.exists():
+        return {}
+    result: dict[str, dict] = {}
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            result[row["program_id"]] = {
+                "name_en": row.get("name_en") or None,
+                "name_th_canonical": row.get("name_th_canonical") or None,
+            }
+    return result
+
+
+def _build_coverage(
+    pages: list[PageText],
+    structured: StructuredProgram,
+    name_en_source: str | None,
+) -> dict:
+    total_pages = len(pages)
+    scanned_pages = sum(1 for p in pages if p.extraction_method == "scanned")
+    typhoon_pages = sum(1 for p in pages if p.extraction_method == "typhoon_page")
+
+    if scanned_pages == total_pages and total_pages > 0:
+        method = "scanned"
+    elif typhoon_pages > 0:
+        method = "pymupdf+typhoon_pages"
+    else:
+        method = "pymupdf"
+
+    return {
+        "extraction_method": method,
+        "has_overview": bool(structured.overview),
+        "has_plos": len(structured.plos) > 0,
+        "plo_count": len(structured.plos),
+        "has_courses": len(structured.courses) > 0,
+        "course_count": len(structured.courses),
+        "has_timeline": len(structured.year_timeline) > 0,
+        "has_curriculum_mapping": len(structured.curriculum_mapping) > 0,
+        "scanned_pages": scanned_pages,
+        "total_pages": total_pages,
+        "name_en_source": name_en_source,
+    }
+
+
+def ingest_document(pdf_path: Path, campus: str, name_mapping: dict, verbose: bool = False) -> dict:
     """Full pipeline for one curriculum document (PDF or DOCX). Returns a status dict."""
     program_id = _program_id_from_path(pdf_path, campus)
     status = {
@@ -101,19 +148,23 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
         "campus": campus,
         "program_id": program_id,
         "chunks": 0,
-        "plos": 0,
         "skipped": False,
         "errors": [],
     }
 
     client = db.get_client()
 
-    # Always upsert the program row with proper name/degree — runs even on skip
-    # so re-running the ingest backfills existing records.
     name_th = _program_name_from_stem(pdf_path.stem)
+
+    # Resolve English name: CSV mapping first, auto-extract from text later
+    mapping = name_mapping.get(program_id, {})
+    name_en_from_csv = mapping.get("name_en")
+    name_en_source: str | None = "csv_mapping" if name_en_from_csv else None
+
     db.upsert_program(client, {
         "id": program_id,
         "name_th": name_th,
+        "name_en": name_en_from_csv,
         "faculty": campus,
         "degree_level": _degree_level(pdf_path.stem),
     })
@@ -133,10 +184,20 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
         status["errors"].append(f"text extraction ({type(exc).__name__}): {exc}")
         return status
 
-    # Backfill English program name from OCR text when found.
-    name_en = _extract_name_en(doc_text)
-    if name_en:
-        db.upsert_program(client, {"id": program_id, "name_en": name_en})
+    # Backfill English name from PDF text if CSV had nothing
+    if not name_en_from_csv:
+        name_en_auto = _extract_name_en(doc_text)
+        if name_en_auto:
+            db.upsert_program(client, {"id": program_id, "name_en": name_en_auto})
+            name_en_source = "auto_extracted"
+
+    # ── Scanned PDF — write partial record and stop ─────────────────────────
+    all_scanned = all(p.extraction_method == "scanned" for p in pages)
+    if all_scanned:
+        coverage = _build_coverage(pages, StructuredProgram(), name_en_source)
+        db.update_program_structured(client, program_id, {"coverage": coverage})
+        status["errors"].append("scanned PDF — no native text, OCR disabled")
+        return status
 
     # ── Curriculum check — skip MOUs, agreements, announcements ────────────
     if not _is_curriculum_doc(doc_text):
@@ -159,7 +220,18 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
     except Exception as exc:
         status["errors"].append(f"embedding ({type(exc).__name__}): {exc}")
 
-    # PLO extraction is run separately via a dedicated command (too slow per-file)
+    # ── Structured extraction ───────────────────────────────────────────────
+    structured = extract_structured(doc_text, verbose=verbose)
+    coverage = _build_coverage(pages, structured, name_en_source)
+
+    db.update_program_structured(client, program_id, {
+        "overview": structured.overview or None,
+        "plos": structured.plos,
+        "courses": structured.courses,
+        "year_timeline": structured.year_timeline,
+        "curriculum_mapping": structured.curriculum_mapping,
+        "coverage": coverage,
+    })
 
     return status
 
@@ -229,10 +301,13 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
             elif a == "--sample" and args.index(a) + 1 < len(args):
                 sample = int(args[args.index(a) + 1])
 
-    base_dir = Path("data/raw/curriculum")
+    base_dir = Path("data/native/curriculum")
     if not base_dir.exists():
-        console.print("[red]data/raw/curriculum/ not found. Run kuru-download first.[/red]")
+        console.print("[red]data/native/curriculum/ not found. Run kuru-download first.[/red]")
         sys.exit(1)
+
+    name_mapping = _load_name_mapping()
+    console.print(f"[dim]Loaded {len(name_mapping)} name mapping(s) from CSV[/dim]")
 
     docs = find_documents(base_dir, campus)
     if not docs:
@@ -269,7 +344,7 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
     hb.start()
 
     pool = ThreadPoolExecutor(max_workers=FILE_WORKERS)
-    futures = {pool.submit(ingest_document, pdf, campus, False): pdf for pdf in docs}
+    futures = {pool.submit(ingest_document, pdf, campus, name_mapping, False): pdf for pdf in docs}
     try:
         for future in as_completed(futures):
             status = future.result()
@@ -304,7 +379,7 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
     for r in done:
         console.print(
             f"  [green]✓[/green] {r['file']} → [green]{r['program_id']}[/green] "
-            f"chunks={r['chunks']} PLOs={r['plos']}"
+            f"chunks={r['chunks']}"
         )
     for r in failed:
         console.print(f"  [red]✗[/red] {r['file']} → {r['program_id']}")
