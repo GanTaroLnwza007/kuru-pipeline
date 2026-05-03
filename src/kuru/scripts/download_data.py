@@ -177,7 +177,90 @@ def _retry_manual(entries: dict[str, str]) -> None:
             print(f"  FAILED: {exc}")
 
 
+def _list_folder(folder_id: str, label: str) -> list:
+    """List all files in a Drive folder (no download) using gdown's skip_download mode."""
+    print(f"\nListing {label} (folder {folder_id}) …")
+    try:
+        items = gdown.download_folder(
+            id=folder_id,
+            skip_download=True,
+            quiet=True,
+            use_cookies=False,
+        )
+        if not items:
+            print("  (empty or inaccessible)")
+            return []
+        for item in sorted(items, key=lambda x: getattr(x, "path", str(x))):
+            name = getattr(item, "path", str(item))
+            file_id = getattr(item, "id", "?")
+            print(f"  [{file_id}]  {name}")
+        print(f"  Total: {len(items)} file(s)")
+        return items
+    except Exception as exc:
+        print(f"  ERROR: {exc}")
+        return []
+
+
+def _sync_folder(folder_id: str, output: str, label: str) -> None:
+    """List Drive folder contents and download only files missing locally."""
+    print(f"\nSyncing {label} …")
+    items = gdown.download_folder(
+        id=folder_id,
+        skip_download=True,
+        quiet=True,
+        use_cookies=False,
+    )
+    if not items:
+        print("  (empty or inaccessible)")
+        return
+
+    output_path = Path(output)
+    missing = []
+    for item in items:
+        rel = Path(getattr(item, "path", ""))
+        # item.path is relative to the Drive folder root (e.g. "บางเขน\วิศวฯ\file.pdf")
+        # Strip the top-level campus prefix that gdown prepends — the output dir is already that root
+        local = output_path / rel
+        if not local.exists():
+            missing.append(item)
+
+    if not missing:
+        print(f"  All {len(items)} file(s) already present — nothing to download.")
+        return
+
+    print(f"  {len(items) - len(missing)}/{len(items)} already local — downloading {len(missing)} missing …")
+    for item in missing:
+        rel = Path(getattr(item, "path", ""))
+        local = output_path / rel
+        local.parent.mkdir(parents=True, exist_ok=True)
+        file_id = getattr(item, "id", None)
+        print(f"  → {rel}")
+        try:
+            time.sleep(1)
+            gdown.download(id=file_id, output=str(local), quiet=False, fuzzy=True)
+        except Exception as exc:
+            print(f"    FAILED: {exc}")
+
+
 def main() -> None:
+    import sys as _sys
+    if "--list" in _sys.argv:
+        _list_folder(CURRICULUM_FOLDER_ID, "Curriculum — บางเขน + กพส")
+        for output_dir, folder_id in EXTRA_CAMPUS_FOLDERS.items():
+            _list_folder(folder_id, f"Curriculum — {Path(output_dir).name}")
+        return
+
+    if "--sync" in _sys.argv:
+        _sync_folder(CURRICULUM_FOLDER_ID, "data/native/curriculum", "Curriculum — บางเขน + กพส")
+        for output_dir, folder_id in EXTRA_CAMPUS_FOLDERS.items():
+            _sync_folder(folder_id, output_dir, f"Curriculum — {Path(output_dir).name}")
+        _follow_txt_redirects("data/native/curriculum")
+        _follow_pdf_redirects("data/native/curriculum")
+        curr_pdf  = len(list(Path("data/native/curriculum").rglob("*.pdf")))
+        curr_docx = len(list(Path("data/native/curriculum").rglob("*.docx")))
+        print(f"\nDone.  Curriculum: {curr_pdf} PDF(s), {curr_docx} docx")
+        return
+
     _download_folder(TCAS1_FOLDER_ID,      "data/native/tcas",      "TCAS PDFs + data")
     _download_folder(CURRICULUM_FOLDER_ID, "data/native/curriculum", "Curriculum (มคอ.2) — บางเขน + กพส")
     for output_dir, folder_id in EXTRA_CAMPUS_FOLDERS.items():

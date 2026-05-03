@@ -100,19 +100,25 @@ returns table (
   metadata     jsonb,
   similarity   float
 )
-language sql stable as $$
+language plpgsql volatile as $$
+begin
+  -- Probe 50 out of 100 IVFFlat lists for full recall at this dataset size.
+  -- Default probes=1 caused ~9000 chunks to be invisible in search results.
+  set local ivfflat.probes = 50;
+  return query
   select
-    id,
-    program_id,
-    source_file,
-    section_type,
-    content,
-    metadata,
-    1 - (embedding <=> query_embedding) as similarity
-  from chunks
+    c.id,
+    c.program_id,
+    c.source_file,
+    c.section_type,
+    c.content,
+    c.metadata,
+    1 - (c.embedding <=> query_embedding) as similarity
+  from chunks c
   where
-    (filter_section is null or section_type = filter_section)
-    and (filter_program is null or program_id = filter_program)
-  order by embedding <=> query_embedding
+    (filter_section is null or c.section_type = filter_section)
+    and (filter_program is null or c.program_id = filter_program)
+  order by c.embedding <=> query_embedding
   limit match_count;
+end;
 $$;

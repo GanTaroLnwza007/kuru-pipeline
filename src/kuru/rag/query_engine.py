@@ -43,21 +43,48 @@ LISTING_KEYWORDS = re.compile(
 )
 
 def _resolve_program_from_query(question: str, programs: list[dict]) -> str | None:
-    """Return program_id if the question mentions a program by its English name.
+    """Return program_id if the question mentions a specific program by name (Thai or English).
 
-    Picks the longest matching English name to avoid false positives from short tokens.
+    English: substring match on name_en (longest wins).
+    Thai: token match on name_th — count how many ≥4-char Thai tokens from the query
+          appear in the program's name_th; pick the program with the most hits (min 1).
     """
     q_lower = question.lower()
-    best_len = 0
-    best_id: str | None = None
+
+    # English match — longest name_en substring wins
+    best_en_len = 0
+    best_en_id: str | None = None
     for p in programs:
         name_en = (p.get("name_en") or "").strip().lower()
         if len(name_en) < 8:
             continue
-        if name_en in q_lower and len(name_en) > best_len:
-            best_len = len(name_en)
-            best_id = p["id"]
-    return best_id
+        if name_en in q_lower and len(name_en) > best_en_len:
+            best_en_len = len(name_en)
+            best_en_id = p["id"]
+    if best_en_id:
+        return best_en_id
+
+    # Thai match — tokenize and count hits against name_th
+    try:
+        from pythainlp.tokenize import word_tokenize as _th_tok
+        q_tokens = [t for t in _th_tok(question, engine="newmm") if re.match(r"[ก-๙]{4,}", t)]
+    except Exception:
+        q_tokens = re.findall(r"[ก-๙]{4,}", question)
+
+    if not q_tokens:
+        return None
+
+    best_hits = 0
+    best_th_id: str | None = None
+    for p in programs:
+        name_th = (p.get("name_th") or "")
+        hits = sum(1 for t in q_tokens if t in name_th)
+        if hits > best_hits:
+            best_hits = hits
+            best_th_id = p["id"]
+
+    # Require at least 2 token hits to avoid false positives on short common words
+    return best_th_id if best_hits >= 2 else None
 
 
 RAG_SYSTEM_PROMPT = """You are KUru, a warm and knowledgeable academic companion for Kasetsart University (KU) prospective students. Think of yourself as a helpful older student who genuinely cares about guiding juniors — enthusiastic, friendly, and honest.
@@ -208,6 +235,7 @@ def query(
     # do a targeted search filtered to that program_id and merge it to the front.
     # This fixes the case where English queries fail to retrieve Thai-named documents.
     resolved_program_id: str | None = None
+    all_programs_list: list[dict] = []
     if not is_listing_query and not program_id:
         all_programs_list = db.get_programs(client)
         resolved_program_id = _resolve_program_from_query(question, all_programs_list)
@@ -343,7 +371,31 @@ def query(
         for c in chunks
     ]
 
-    # 4. Assemble context
+    # 4. No-data guard — return an honest response rather than sending empty context to
+    # the LLM, which would cause confident-sounding hallucinations.
+    if not chunks and not tcas_records and not is_listing_query:
+        if resolved_program_id:
+            prog_name = next(
+                (p.get("name_th") or p.get("id") for p in all_programs_list if p.get("id") == resolved_program_id),
+                resolved_program_id,
+            )
+            no_data_msg = (
+                f"ขออภัยครับ ยังไม่มีข้อมูลหลักสูตรของ {prog_name} ในระบบขณะนี้ "
+                "กรุณาติดต่อคณะโดยตรงหรือตรวจสอบที่เว็บไซต์ของมหาวิทยาลัยเกษตรศาสตร์ครับ"
+            )
+        else:
+            no_data_msg = (
+                "ขออภัยครับ ไม่พบข้อมูลที่เกี่ยวข้องในฐานข้อมูล "
+                "ลองถามเกี่ยวกับหลักสูตรหรือการรับสมัคร TCAS ของมหาวิทยาลัยเกษตรศาสตร์ครับ"
+            )
+        return RAGResult(
+            answer=no_data_msg,
+            sources=[],
+            used_tcas_data=False,
+            debug_info=debug_info if debug else None,
+        )
+
+    # 5. Assemble context
     context_parts: list[str] = []
 
     # For broad "what programs exist" queries, prepend the programs registry
@@ -364,6 +416,24 @@ def query(
             context_parts.append("\n".join(prog_lines))
             debug_info["programs_injected"] = len(programs)
 
+    # Prepend a coverage note when a specific program is identified, so the LLM
+    # knows what the source document does and doesn't contain.
+    if resolved_program_id and all_programs_list:
+        prog = next((p for p in all_programs_list if p.get("id") == resolved_program_id), None)
+        if prog:
+            cov = prog.get("coverage") or {}
+            notes: list[str] = []
+            method = cov.get("extraction_method", "")
+            if method == "scanned":
+                notes.append("This program's source document was a scanned image — text may be incomplete.")
+            else:
+                if not cov.get("has_plos"):
+                    notes.append("The source document for this program does NOT contain PLO (Program Learning Outcomes) sections.")
+                if not cov.get("has_overview"):
+                    notes.append("The source document does not contain a program overview section.")
+            if notes:
+                context_parts.append("[Document Coverage Note]\n" + "\n".join(f"- {n}" for n in notes))
+
     for c in chunks:
         sim = round(c.get("similarity", 0.0), 3)
         context_parts.append(
@@ -374,10 +444,10 @@ def query(
 
     context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant context found."
 
-    # 5. Generate answer
+    # 6. Generate answer
     answer = _generate(context, question)
 
-    # 6. Build sources list
+    # 7. Build sources list
     sources = [
         {
             "source_file": c.get("source_file", ""),

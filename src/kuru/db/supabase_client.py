@@ -67,16 +67,20 @@ def similarity_search(
           metadata     jsonb,
           similarity   float
         )
-        language sql stable as $$
+        language plpgsql volatile as $$
+        begin
+          set local ivfflat.probes = 50;
+          return query
           select
-            id, program_id, source_file, section_type, content, metadata,
-            1 - (embedding <=> query_embedding) as similarity
-          from chunks
+            c.id, c.program_id, c.source_file, c.section_type, c.content, c.metadata,
+            1 - (c.embedding <=> query_embedding) as similarity
+          from chunks c
           where
-            (filter_section is null or section_type = filter_section)
-            and (filter_program is null or program_id = filter_program)
-          order by embedding <=> query_embedding
+            (filter_section is null or c.section_type = filter_section)
+            and (filter_program is null or c.program_id = filter_program)
+          order by c.embedding <=> query_embedding
           limit match_count;
+        end;
         $$;
     """
     result = client.rpc(
@@ -107,7 +111,7 @@ def get_programs(
     faculty: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch all known programs, optionally filtered by faculty."""
-    q = client.table("programs").select("id, name_th, name_en, faculty, degree_level")
+    q = client.table("programs").select("id, name_th, name_en, faculty, degree_level, coverage")
     if faculty:
         q = q.ilike("faculty", f"%{faculty}%")
     return q.order("faculty").execute().data or []

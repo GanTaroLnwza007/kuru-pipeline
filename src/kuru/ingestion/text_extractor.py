@@ -1,236 +1,132 @@
-"""Text extractor — PyMuPDF for born-digital PDFs, vision API for scanned."""
+"""Text extractor — PyMuPDF for born-digital PDFs, per-page Typhoon for image pages.
+
+Bulk OCR (for fully scanned PDFs) lives in ocr_extractor.py and is NOT called here.
+To re-enable scanned OCR:
+    from kuru.ingestion.ocr_extractor import extract_with_ocr
+"""
 
 from __future__ import annotations
 
 import base64
-import struct
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from kuru.ingestion.utils import is_transient_error, safe_print
-from kuru.llm import OCR_MODEL, get_gemini_client, get_ocr_client
+from kuru.ingestion.utils import png_dimensions, safe_print
 
-# If PyMuPDF extracts fewer than this many chars total, treat as scanned.
+# If PyMuPDF extracts fewer than this many chars total, the PDF is treated as scanned.
 SCANNED_CHAR_THRESHOLD = 500
+
+# Pages with fewer than this many chars get routed to per-page Typhoon OCR.
+_PAGE_LOW_YIELD_CHARS = 50
+
+_PAGE_OCR_DPI = 96
 
 
 @dataclass
 class PageText:
     page_num: int
     text: str
-    extraction_method: str  # 'pymupdf' | 'vision' | 'python-docx' | 'failed'
+    extraction_method: str  # 'pymupdf' | 'typhoon_page' | 'scanned' | 'python-docx' | 'failed'
 
 
 # ─────────────────────────────────────────
-# PyMuPDF extraction (born-digital)
+# Internal helpers (exported for testing)
 # ─────────────────────────────────────────
 
-def _extract_pymupdf(pdf_path: Path) -> list[PageText]:
-    doc = fitz.open(str(pdf_path))
-    pages = [
-        PageText(
-            page_num=i,
-            text=page.get_text("text"),
-            extraction_method="pymupdf",
+def _should_ocr_page(text: str) -> bool:
+    """True when a page's extracted text is too short to be useful."""
+    return len(text.strip()) < _PAGE_LOW_YIELD_CHARS
+
+
+def _extract_page_typhoon(page_b64: str) -> str:
+    """Send a single low-yield page to Typhoon OCR. Returns '' if unavailable."""
+    if not os.environ.get("TYPHOON_API_KEY"):
+        return ""
+    try:
+        from kuru.llm import get_ocr_client  # noqa: PLC0415
+
+        w, h = png_dimensions(page_b64)
+        prompt = (
+            f"Below is an image of a document page. The image dimensions are {w}x{h} pixels. "
+            "Extract all text from this page. Preserve Thai text exactly as written. "
+            "Output only the extracted text with no commentary."
         )
-        for i, page in enumerate(doc)
-    ]
+        response = get_ocr_client().chat.completions.create(
+            model="typhoon-ocr",
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{page_b64}"}},
+            ]}],
+            temperature=0.1,
+            max_tokens=4096,
+            top_p=0.6,
+            extra_body={"repetition_penalty": 1.2},
+        )
+        if not response.choices:
+            return ""
+        return response.choices[0].message.content or ""
+    except Exception:
+        return ""
+
+
+def _build_page_texts(pdf_path: Path, verbose: bool = False) -> list[PageText]:
+    """Extract text page-by-page. Low-yield pages are sent to per-page Typhoon."""
+    doc = fitz.open(str(pdf_path))
+    pages: list[PageText] = []
+
+    for i, page in enumerate(doc):
+        text = page.get_text("text")
+        method = "pymupdf"
+
+        if _should_ocr_page(text):
+            b64 = base64.b64encode(
+                page.get_pixmap(dpi=_PAGE_OCR_DPI).tobytes("png")
+            ).decode()
+            ocr_text = _extract_page_typhoon(b64)
+            if ocr_text.strip():
+                text = ocr_text
+                method = "typhoon_page"
+                if verbose:
+                    safe_print(f"  [typhoon] ✓ page {i + 1} ({len(text)} chars)")
+
+        pages.append(PageText(page_num=i, text=text, extraction_method=method))
+
     doc.close()
     return pages
 
 
 # ─────────────────────────────────────────
-# Vision OCR fallback (scanned / image-only PDFs)
+# Public API
 # ─────────────────────────────────────────
 
-_PDF_EXTRACT_PROMPT = (
-    "Extract all text from these PDF page images. "
-    "Preserve Thai text exactly as written. "
-    "Output only the extracted text with no commentary."
-)
+def extract_text(
+    pdf_path: str | Path,
+    use_vision_fallback: bool = True,  # kept for call-site compatibility, ignored
+    verbose: bool = False,
+) -> list[PageText]:
+    """Extract text from a PDF using PyMuPDF + optional per-page Typhoon for image pages.
 
-_OCR_DPI = 96         # 96 dpi — good enough for OCR, ~2.5x fewer image tokens than 150
-# Typhoon is designed for 1 page at a time; Gemini handles 4 efficiently.
-_OCR_BATCH_SIZE = 1 if OCR_MODEL.startswith("typhoon") else 4
-_OCR_WORKERS = 2      # parallel batch calls — 2 keeps Typhoon under 20 req/min limit
-
-
-def _png_dimensions(b64: str) -> tuple[int, int]:
-    """Extract width, height from a base64 PNG without full decode (reads 24 bytes)."""
-    raw = base64.b64decode(b64[:64])  # first 64 chars covers the 24-byte PNG header
-    w = struct.unpack(">I", raw[16:20])[0]
-    h = struct.unpack(">I", raw[20:24])[0]
-    return w, h
-
-
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=2, min=30, max=300),
-    retry=retry_if_exception(is_transient_error),
-    reraise=True,
-)
-def _ocr_batch(images_b64: list[str]) -> str:
-    """Send a batch of base64 PNG pages to the vision model and return extracted text."""
-    if OCR_MODEL.startswith("typhoon"):
-        return _ocr_batch_typhoon(images_b64)
-    return _ocr_batch_gemini(images_b64)
-
-
-def _ocr_batch_gemini(images_b64: list[str]) -> str:
-    """Gemini OCR via native google-genai SDK — thinking disabled to avoid cost blowup."""
-    from google import genai  # noqa: PLC0415
-    from google.genai import types  # noqa: PLC0415
-
-    parts = [
-        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
-        for b64 in images_b64
-    ]
-    parts.append(types.Part.from_text(text=_PDF_EXTRACT_PROMPT))
-
-    response = get_gemini_client().models.generate_content(
-        model=OCR_MODEL,
-        contents=parts,
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-    )
-    return response.text or ""
-
-
-def _ocr_batch_typhoon(images_b64: list[str]) -> str:
-    """Typhoon OCR via OpenAI-compatible API — 1 page per call with dimension prompt."""
-    b64 = images_b64[0]
-    w, h = _png_dimensions(b64)
-    prompt = (
-        f"Below is an image of a document page along with its dimensions. "
-        f"The image dimensions are {w}x{h} pixels. "
-        "Extract all text from this page. Preserve Thai text exactly as written. "
-        "Output only the extracted text with no commentary."
-    )
-    response = get_ocr_client().chat.completions.create(
-        model=OCR_MODEL,
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-        ]}],
-        temperature=0.1,
-        max_tokens=16384,
-        top_p=0.6,
-        extra_body={"repetition_penalty": 1.2},
-    )
-    if not response.choices:
-        return ""
-    return response.choices[0].message.content or ""
-
-
-def _is_garbage_line(line: str) -> bool:
-    """Return True for OCR hallucination lines — a single character repeated (e.g. า า า า or 7777)."""
-    chars = [c for c in line if not c.isspace()]
-    if len(chars) < 10:
-        return False
-    dominant = max(set(chars), key=chars.count)
-    return chars.count(dominant) / len(chars) > 0.85
-
-
-def _dedup_lines(text: str) -> str:
-    """Remove consecutive duplicate lines and OCR hallucination lines (single-char repeats)."""
-    lines = text.splitlines()
-    result: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and _is_garbage_line(stripped):
-            continue
-        if not result or stripped != result[-1].strip():
-            result.append(line)
-    return "\n".join(result)
-
-
-def _extract_with_vision(pdf_path: Path, verbose: bool = False) -> str:
-    """Render PDF pages in parallel batches to avoid hallucination and reduce total time."""
-    if verbose:
-        safe_print(f"  Rendering {pdf_path.name} for vision OCR …")
-
-    doc = fitz.open(str(pdf_path))
-    pages_b64 = [
-        base64.b64encode(page.get_pixmap(dpi=_OCR_DPI).tobytes("png")).decode()
-        for page in doc
-    ]
-    doc.close()
-
-    batches = [
-        (i, pages_b64[i : i + _OCR_BATCH_SIZE])
-        for i in range(0, len(pages_b64), _OCR_BATCH_SIZE)
-    ]
-    total_pages = len(pages_b64)
-
-    if verbose:
-        safe_print(f"  {len(batches)} batches × {_OCR_BATCH_SIZE} pages, {_OCR_WORKERS} workers …")
-
-    results: dict[int, str] = {}
-    with ThreadPoolExecutor(max_workers=_OCR_WORKERS) as pool:
-        futures = {pool.submit(_ocr_batch, batch): idx for idx, batch in batches}
-        for future in as_completed(futures):
-            idx = futures[future]
-            start_page = idx + 1
-            end_page = min(idx + _OCR_BATCH_SIZE, total_pages)
-            results[idx] = _dedup_lines(future.result())
-            if verbose:
-                safe_print(f"  ✓ pages {start_page}–{end_page}")
-
-    # Cross-batch dedup: if Gemini got stuck in a loop, every batch returns the same text.
-    # Drop duplicate batch outputs so a 50-page PDF doesn't become 50 copies of 2 lines.
-    seen_batch_texts: set[str] = set()
-    for idx in sorted(results.keys()):
-        normalized = results[idx].strip()
-        if normalized in seen_batch_texts:
-            results[idx] = ""
-        elif normalized:
-            seen_batch_texts.add(normalized)
-
-    return "\n\n".join(results[i] for i, _ in batches if results.get(i, "").strip())
-
-
-def _extract_with_tesseract(pdf_path: Path, verbose: bool = False) -> str:
-    """Last-resort OCR using Tesseract when Gemini returns empty/garbage.
-
-    Requires: `uv add pytesseract` + Tesseract binary with Thai language data installed.
-    If either is missing, logs a warning and returns "" — never crashes the ingest.
+    If total extracted chars < SCANNED_CHAR_THRESHOLD, all pages are marked 'scanned'
+    and no OCR is attempted. Re-enable full OCR by importing extract_with_ocr from
+    kuru.ingestion.ocr_extractor.
     """
-    try:
-        import pytesseract
-        from PIL import Image  # noqa: PLC0415
-    except ImportError:
-        safe_print("  [tesseract] pytesseract not installed — skipping fallback (uv add pytesseract)")
-        return ""
+    pdf_path = Path(pdf_path)
+    pages = _build_page_texts(pdf_path, verbose=verbose)
+    total_chars = sum(len(p.text.strip()) for p in pages)
 
-    if verbose:
-        safe_print(f"  [tesseract] Falling back to Tesseract for {pdf_path.name} …")
-
-    try:
-        doc = fitz.open(str(pdf_path))
-        parts: list[str] = []
-        for i, page in enumerate(doc):
-            pix = page.get_pixmap(dpi=_OCR_DPI)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            text = pytesseract.image_to_string(img, lang="tha+eng", timeout=60)
-            text = _dedup_lines(text)
-            if text.strip():
-                parts.append(text)
-            if verbose:
-                safe_print(f"  [tesseract] ✓ page {i + 1}/{len(doc)}")
-        doc.close()
-        result = "\n\n".join(parts)
+    if total_chars < SCANNED_CHAR_THRESHOLD:
         if verbose:
-            safe_print(f"  [tesseract] {len(result)} chars extracted")
-        return result
-    except Exception as exc:
-        safe_print(f"  [tesseract] failed ({type(exc).__name__}): {exc}")
-        return ""
+            safe_print(
+                f"  Low text yield ({total_chars} chars) — marking as scanned. "
+                "OCR disabled; import ocr_extractor.extract_with_ocr to re-enable."
+            )
+        for p in pages:
+            p.extraction_method = "scanned"
+
+    return pages
 
 
 def render_page_b64(pdf_path: Path, page_num: int, dpi: int = 150) -> str:
@@ -241,51 +137,10 @@ def render_page_b64(pdf_path: Path, page_num: int, dpi: int = 150) -> str:
     return base64.b64encode(pix.tobytes("png")).decode()
 
 
-# ─────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────
-
-def extract_text(
-    pdf_path: str | Path,
-    use_vision_fallback: bool = True,
-    verbose: bool = False,
-) -> list[PageText]:
-    """Extract text from a PDF.
-
-    1. PyMuPDF (free, instant).
-    2. If total chars < threshold AND fallback enabled → Gemini Files API (1 API call).
-    """
-    pdf_path = Path(pdf_path)
-    pages = _extract_pymupdf(pdf_path)
-    total_chars = sum(len(p.text.strip()) for p in pages)
-
-    if total_chars >= SCANNED_CHAR_THRESHOLD or not use_vision_fallback:
-        return pages
-
-    if verbose:
-        safe_print(f"  Low text yield ({total_chars} chars) — using Gemini Files API")
-
-    try:
-        text = _extract_with_vision(pdf_path, verbose=verbose)
-        if len(text.strip()) < SCANNED_CHAR_THRESHOLD:
-            safe_print(f"  Vision OCR yielded only {len(text.strip())} chars — trying Tesseract fallback")
-            text = _extract_with_tesseract(pdf_path, verbose=verbose)
-        return [PageText(page_num=0, text=text, extraction_method="vision")]
-    except Exception as exc:
-        safe_print(f"  Vision OCR failed ({type(exc).__name__}): {exc}")
-        text = _extract_with_tesseract(pdf_path, verbose=verbose)
-        if text.strip():
-            return [PageText(page_num=0, text=text, extraction_method="vision")]
-        return [PageText(page_num=0, text="", extraction_method="failed")]
-
-
 def extract_text_from_docx(docx_path: Path) -> list[PageText]:
-    """Extract text from a DOCX file using python-docx.
-
-    Includes body paragraphs and table cell text.
-    """
+    """Extract text from a DOCX file using python-docx."""
     try:
-        import docx  # python-docx
+        import docx  # python-docx  # noqa: PLC0415
 
         doc = docx.Document(str(docx_path))
         parts: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]

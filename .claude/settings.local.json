@@ -29,7 +29,14 @@
       "Bash(grep -E \"\\\\.py$|^d\")",
       "WebFetch(domain:docs.opentyphoon.ai)",
       "WebFetch(domain:opentyphoon.ai)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(PYTHONPATH=/d/work/project/kuru-pipeline/src uv run pytest tests/test_text_extractor.py -v)",
+      "Bash(uv pip *)",
+      "Bash(taskkill /F /FI \"WINDOWTITLE eq kuru-ingest*\")",
+      "Bash(pkill -f kuru-ingest-mko)",
+      "Bash(taskkill /F /IM python.exe)",
+      "Bash(rm -rf \"data/native/curriculum/บางเขน\")",
+      "PowerShell(uv run *)"
     ]
   }
 }

@@ -236,17 +236,33 @@ def ingest_document(pdf_path: Path, campus: str, name_mapping: dict, verbose: bo
     return status
 
 
+_APPENDIX_RE = re.compile(r"ภาคผนวก", re.IGNORECASE)
+
+
 def find_documents(base_dir: Path, campus: str) -> list[Path]:
     """Return all ingestable documents (.pdf, .docx) for the given campus."""
     all_docs = sorted(
         p for p in base_dir.rglob("*")
         if p.suffix.lower() in {".pdf", ".docx"}
     )
-    # Drop officially-closed programs — their content is outdated and misleads retrieval.
+    # Drop officially-closed programs.
     closed = [p for p in all_docs if _CLOSED_RE.search(p.name)]
     if closed:
         console.print(f"[dim]Skipping {len(closed)} closed-program file(s) (ปิดหลักสูตร)[/dim]")
     all_docs = [p for p in all_docs if not _CLOSED_RE.search(p.name)]
+
+    # Drop appendix folders (ภาคผนวก) — supporting docs, not curriculum programs.
+    appendix = [p for p in all_docs if any(_APPENDIX_RE.search(part) for part in p.parts)]
+    if appendix:
+        console.print(f"[dim]Skipping {len(appendix)} appendix file(s) (ภาคผนวก)[/dim]")
+    all_docs = [p for p in all_docs if not any(_APPENDIX_RE.search(part) for part in p.parts)]
+
+    # When a folder has both PDF and DOCX with the same stem, keep only the PDF.
+    pdf_stems = {p.parent / p.stem for p in all_docs if p.suffix.lower() == ".pdf"}
+    docx_dupes = [p for p in all_docs if p.suffix.lower() == ".docx" and (p.parent / p.stem) in pdf_stems]
+    if docx_dupes:
+        console.print(f"[dim]Skipping {len(docx_dupes)} DOCX duplicate(s) (PDF version exists)[/dim]")
+    all_docs = [p for p in all_docs if p not in docx_dupes]
 
     matches = [p for p in all_docs if campus in str(p)]
     if matches:
