@@ -36,7 +36,8 @@
       "Bash(pkill -f kuru-ingest-mko)",
       "Bash(taskkill /F /IM python.exe)",
       "Bash(rm -rf \"data/native/curriculum/บางเขน\")",
-      "PowerShell(uv run *)"
+      "PowerShell(uv run *)",
+      "Bash(gh repo *)"
     ]
   }
 }
