@@ -37,7 +37,10 @@
       "Bash(taskkill /F /IM python.exe)",
       "Bash(rm -rf \"data/native/curriculum/บางเขน\")",
       "PowerShell(uv run *)",
-      "Bash(gh repo *)"
+      "Bash(gh repo *)",
+      "Bash(Remove-Item *)",
+      "Read(//d/work/project/kuru/frontend/**)",
+      "Bash(npm install *)"
     ]
   }
 }

@@ -82,6 +82,19 @@ alter table programs add column if not exists curriculum_mapping jsonb default '
 alter table programs add column if not exists coverage           jsonb default '{}';
 
 -- ─────────────────────────────────────────
+-- User feedback on chat answers
+-- Thumbs up/down collected from the UI per answer.
+-- ─────────────────────────────────────────
+create table if not exists feedback (
+  id          uuid primary key default gen_random_uuid(),
+  session_id  text,
+  question    text,
+  answer      text,
+  rating      smallint,   -- 1 = helpful, -1 = not helpful
+  created_at  timestamptz default now()
+);
+
+-- ─────────────────────────────────────────
 -- pgvector similarity search RPC function
 -- Called by supabase_client.similarity_search()
 -- ─────────────────────────────────────────

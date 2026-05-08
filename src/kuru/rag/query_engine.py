@@ -28,7 +28,8 @@ from kuru.ingestion.utils import is_transient_error
 # Thai + English keywords that signal a TCAS admission question
 TCAS_KEYWORDS = re.compile(
     r"TCAS|GPAX|เกรด|รับ|สมัคร|คะแนน|รอบ|TGAT|TPAT|A-Level|quota|โควตา|วันรับ|ประกาศ|admission|score|portfolio"
-    r"|enroll|apply|applying|application|qualify|qualification|requirement|สอบ|ข้อสอบ|เข้าเรียน|เข้าศึกษา|รับสมัคร|คุณสมบัติ",
+    r"|enroll|apply|applying|application|qualify|qualification|requirement|สอบ|ข้อสอบ|เข้าเรียน|เข้าศึกษา|รับสมัคร|คุณสมบัติ"
+    r"|อยากเข้า|จะเข้า|วิธีเข้า|ต้องทำไง|ต้องทำอะไร|ขั้นตอนการสมัคร|วิธีสมัคร",
     re.IGNORECASE,
 )
 
@@ -42,20 +43,40 @@ LISTING_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Common program abbreviations → canonical English name (must match name_en in DB exactly)
+# NOTE: "cs" maps to "computer engineering" because KU's Computer Science (Faculty of Science)
+# is not ingested — CPE is the closest available engineering equivalent.
+_PROGRAM_ABBREVS: dict[str, str] = {
+    "cs":  "computer engineering",
+    "cpe": "computer engineering",
+    "ske": "software and knowledge engineering",
+    "ee":  "electrical engineering",
+    "me":  "mechanical engineering",
+    "ce":  "civil engineering",
+    "ie":  "industrial engineering",
+    "che": "chemical engineering",
+}
+
 def _resolve_program_from_query(question: str, programs: list[dict]) -> str | None:
     """Return program_id if the question mentions a specific program by name (Thai or English).
 
-    English: substring match on name_en (longest wins).
+    English: substring match on name_en (longest wins). Abbreviations (CS, CPE, SKE…)
+             are expanded before matching so "CS" resolves to "computer science".
     Thai: token match on name_th — count how many ≥4-char Thai tokens from the query
           appear in the program's name_th; pick the program with the most hits (min 1).
     """
     q_lower = question.lower()
+    # Expand abbreviations so "CS" → "computer science" is found by substring match
+    for abbr, full in _PROGRAM_ABBREVS.items():
+        if re.search(r"\b" + abbr + r"\b", q_lower):
+            q_lower = q_lower + " " + full
 
     # English match — longest name_en substring wins
+    # Strip parenthetical suffixes e.g. "(IUP)", "(International Program)" before matching
     best_en_len = 0
     best_en_id: str | None = None
     for p in programs:
-        name_en = (p.get("name_en") or "").strip().lower()
+        name_en = re.sub(r"\s*\([^)]+\)\s*$", "", (p.get("name_en") or "")).strip().lower()
         if len(name_en) < 8:
             continue
         if name_en in q_lower and len(name_en) > best_en_len:
@@ -87,14 +108,64 @@ def _resolve_program_from_query(question: str, programs: list[dict]) -> str | No
     return best_th_id if best_hits >= 2 else None
 
 
-RAG_SYSTEM_PROMPT = """You are KUru, a warm and knowledgeable academic companion for Kasetsart University (KU) prospective students. Think of yourself as a helpful older student who genuinely cares about guiding juniors — enthusiastic, friendly, and honest.
+_COMPARISON_RE = re.compile(
+    r"\bกับ\b|\bvs\.?\b|versus|compare|ต่างกัน|เทียบ|เปรียบ|comparison|difference",
+    re.IGNORECASE,
+)
+
+def _resolve_extra_programs(question: str, programs: list[dict], exclude_id: str | None) -> list[str]:
+    """Return up to 2 additional program IDs for comparison queries."""
+    if not _COMPARISON_RE.search(question):
+        return []
+
+    q_lower = question.lower()
+    for abbr, full in _PROGRAM_ABBREVS.items():
+        if re.search(r"\b" + abbr + r"\b", q_lower):
+            q_lower = q_lower + " " + full
+
+    results: list[tuple[int, str]] = []
+    seen_ids = {exclude_id} if exclude_id else set()
+
+    for p in programs:
+        if p["id"] in seen_ids:
+            continue
+        name_en = re.sub(r"\s*\([^)]+\)\s*$", "", (p.get("name_en") or "")).strip().lower()
+        if len(name_en) >= 8 and name_en in q_lower:
+            seen_ids.add(p["id"])
+            results.append((len(name_en), p["id"]))
+
+    try:
+        from pythainlp.tokenize import word_tokenize as _th_tok
+        q_tokens = [t for t in _th_tok(question, engine="newmm") if re.match(r"[ก-๙]{4,}", t)]
+    except Exception:
+        q_tokens = re.findall(r"[ก-๙]{4,}", question)
+
+    for p in programs:
+        if p["id"] in seen_ids:
+            continue
+        name_th = (p.get("name_th") or "")
+        hits = sum(1 for t in q_tokens if t in name_th)
+        if hits >= 2:
+            seen_ids.add(p["id"])
+            results.append((hits, p["id"]))
+
+    results.sort(reverse=True)
+    return [pid for _, pid in results[:2]]
+
+
+RAG_SYSTEM_PROMPT = """You are KUru, a warm and knowledgeable academic companion for Kasetsart University (KU) prospective students. Think of yourself as a helpful older male student who genuinely cares about guiding juniors — enthusiastic, friendly, and honest.
+
+IDENTITY (non-negotiable):
+- You are male. Always use ผม when referring to yourself in Thai. Always end Thai sentences with ครับ, never ค่ะ.
+- Call the student น้อง in Thai responses.
+- In English responses, use "I" and gender-neutral language.
 
 PERSONALITY:
 - Be conversational and natural, not robotic or overly formal.
 - Show genuine interest in the student's goals. Acknowledge what they're looking for before diving in.
 - When you find good info, present it warmly: "Great news — I found..." or "Here's what I know about..."
 - When info is incomplete or missing, be upfront and helpful: "I don't have full details on that yet, but here's what I found..." — then suggest they check the KU website or official admission channels.
-- Use "I" naturally. End with an offer to help further.
+- Use "I" / "ผม" naturally. End with an offer to help further.
 
 GROUNDING RULES (non-negotiable):
 1. Every fact, number, score, and quota MUST come from the provided context. Never use outside knowledge about KU.
@@ -105,7 +176,7 @@ GROUNDING RULES (non-negotiable):
 6. When answering about curriculum: describe PLOs, courses, degree structure — not TCAS scores.
 7. Never invent numbers, quotas, dates, or exam scores.
 8. Cite sources naturally: "According to [filename]..." or "[Source: filename]" at the end.
-9. Answer in the same language as the question (Thai or English).
+9. LANGUAGE — STRICT: detect the language of the student's question. If the question is in English, your ENTIRE response must be in English. If the question is in Thai, your ENTIRE response must be in Thai. Never mix languages or default to Thai for an English question.
 10. CRITICAL — do NOT recommend or describe programs that appear only in [TCAS Admission Data] blocks as if curriculum details are available. Programs in [TCAS Admission Data] may only have admission data, not full curriculum details. If a student asks about a program that only appears in TCAS data (not in a curriculum context block), clearly say: "I only have admission data for this program, not the full curriculum details. For course lists, PLOs, and program structure, please check ku.ac.th directly." """
 
 RAG_USER_TEMPLATE = """Context passages:
@@ -114,6 +185,7 @@ RAG_USER_TEMPLATE = """Context passages:
 ---
 Question: {question}
 
+{lang_instruction}
 Answer:"""
 
 
@@ -163,13 +235,25 @@ def _embed_query(query: str) -> list[float]:
 # Generation
 # ─────────────────────────────────────────
 
+def _lang_instruction(question: str) -> str:
+    thai = len(re.findall(r"[ก-๙]", question))
+    eng = len(re.findall(r"[a-zA-Z]", question))
+    if eng > thai:
+        return "IMPORTANT: Respond ENTIRELY IN ENGLISH. Do not use Thai at all."
+    return "ตอบเป็นภาษาไทยทั้งหมดครับ"
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30), retry=retry_if_exception(is_transient_error), reraise=True)
-def _generate(context: str, question: str) -> str:
-    prompt = RAG_USER_TEMPLATE.format(context=context, question=question)
+def _generate(context: str, question: str, conversation_history: list[dict] | None = None) -> str:
+    prompt = RAG_USER_TEMPLATE.format(
+        context=context, question=question, lang_instruction=_lang_instruction(question)
+    )
+    history = [{"role": t["role"], "content": t["content"]} for t in (conversation_history or [])]
     response = get_client().chat.completions.create(
         model=LLM_MODEL,
         messages=[
             {"role": "system", "content": RAG_SYSTEM_PROMPT},
+            *history,
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
@@ -216,6 +300,7 @@ def query(
     top_k: int = TOP_K,
     program_id: str | None = None,
     debug: bool = False,
+    conversation_history: list[dict] | None = None,
 ) -> RAGResult:
     """Run RAG over มคอ.2 chunks, with TCAS structured data augmentation."""
     client = db.get_client()
@@ -246,6 +331,34 @@ def query(
             # Prepend targeted results, then fill with unfiltered (deduplicated by id)
             seen = {c.get("id") for c in targeted}
             all_chunks = targeted + [c for c in all_chunks if c.get("id") not in seen]
+
+        # For comparison queries, also fetch chunks for additional mentioned programs
+        extra_ids = _resolve_extra_programs(question, all_programs_list, resolved_program_id)
+        if extra_ids:
+            # Comparison mode: embed each program's name rather than the comparison question
+            # so targeted searches return overview content, not "difference" vectors.
+            def _prog_embed(prog_id: str) -> list[float]:
+                name = next(
+                    (re.sub(r"\s*\([^)]+\)\s*$", "", p.get("name_en") or "").strip()
+                     for p in all_programs_list if p["id"] == prog_id),
+                    "",
+                )
+                return _embed_query(name) if name else q_embedding
+
+            # Re-fetch primary program with its own name embedding for better overview chunks
+            if resolved_program_id:
+                targeted = db.similarity_search(
+                    client, _prog_embed(resolved_program_id), top_k=fetch_k, program_id=resolved_program_id
+                )
+                seen = {c.get("id") for c in targeted}
+                all_chunks = targeted + [c for c in all_chunks if c.get("id") not in seen]
+
+            for extra_id in extra_ids:
+                extra = db.similarity_search(
+                    client, _prog_embed(extra_id), top_k=max(fetch_k // 2, 8), program_id=extra_id
+                )
+                seen = {c.get("id") for c in all_chunks}
+                all_chunks = all_chunks + [c for c in extra if c.get("id") not in seen]
 
     # Drop chunks that are too weak to be useful
     above_threshold = [c for c in all_chunks if c.get("similarity", 0.0) >= MIN_SIMILARITY]
@@ -445,7 +558,7 @@ def query(
     context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant context found."
 
     # 6. Generate answer
-    answer = _generate(context, question)
+    answer = _generate(context, question, conversation_history=conversation_history)
 
     # 7. Build sources list
     sources = [
