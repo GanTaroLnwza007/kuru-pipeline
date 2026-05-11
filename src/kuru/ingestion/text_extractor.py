@@ -1,130 +1,104 @@
-"""Text extractor — PyMuPDF for born-digital PDFs, Gemini Files API for scanned."""
+"""Text extractor — PyMuPDF for born-digital PDFs, per-page Typhoon for image pages.
+
+Bulk OCR (for fully scanned PDFs) lives in ocr_extractor.py and is NOT called here.
+To re-enable scanned OCR:
+    from kuru.ingestion.ocr_extractor import extract_with_ocr
+"""
 
 from __future__ import annotations
 
+import base64
 import os
-import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from kuru.ingestion.utils import is_transient_error, safe_print
+from kuru.ingestion.utils import png_dimensions, safe_print
 
-load_dotenv()
-
-_client: genai.Client | None = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-
-GEMINI_MODEL = "gemini-2.5-flash-lite"
-
-# If PyMuPDF extracts fewer than this many chars total, treat as scanned.
+# If PyMuPDF extracts fewer than this many chars total, the PDF is treated as scanned.
 SCANNED_CHAR_THRESHOLD = 500
+
+# Pages with fewer than this many chars get routed to per-page Typhoon OCR.
+_PAGE_LOW_YIELD_CHARS = 50
+
+_PAGE_OCR_DPI = 96
 
 
 @dataclass
 class PageText:
     page_num: int
     text: str
-    extraction_method: str  # 'pymupdf' | 'gemini_files' | 'python-docx' | 'failed'
+    extraction_method: str  # 'pymupdf' | 'typhoon_page' | 'scanned' | 'python-docx' | 'failed'
 
 
 # ─────────────────────────────────────────
-# PyMuPDF extraction (born-digital)
+# Internal helpers (exported for testing)
 # ─────────────────────────────────────────
 
-def _extract_pymupdf(pdf_path: Path) -> list[PageText]:
-    doc = fitz.open(str(pdf_path))
-    pages = [
-        PageText(
-            page_num=i,
-            text=page.get_text("text"),
-            extraction_method="pymupdf",
+def _should_ocr_page(text: str) -> bool:
+    """True when a page's extracted text is too short to be useful."""
+    return len(text.strip()) < _PAGE_LOW_YIELD_CHARS
+
+
+def _extract_page_typhoon(page_b64: str) -> str:
+    """Send a single low-yield page to Typhoon OCR. Returns '' if unavailable."""
+    if not os.environ.get("TYPHOON_API_KEY"):
+        return ""
+    try:
+        from kuru.llm import get_ocr_client  # noqa: PLC0415
+
+        w, h = png_dimensions(page_b64)
+        prompt = (
+            f"Below is an image of a document page. The image dimensions are {w}x{h} pixels. "
+            "Extract all text from this page. Preserve Thai text exactly as written. "
+            "Output only the extracted text with no commentary."
         )
-        for i, page in enumerate(doc)
-    ]
+        response = get_ocr_client().chat.completions.create(
+            model="typhoon-ocr",
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{page_b64}"}},
+            ]}],
+            temperature=0.1,
+            max_tokens=4096,
+            top_p=0.6,
+            extra_body={"repetition_penalty": 1.2},
+        )
+        if response.usage:
+            from kuru.llm import session_usage  # noqa: PLC0415
+            session_usage.add("typhoon-ocr", response.usage)
+        if not response.choices:
+            return ""
+        return response.choices[0].message.content or ""
+    except Exception:
+        return ""
+
+
+def _build_page_texts(pdf_path: Path, verbose: bool = False) -> list[PageText]:
+    """Extract text page-by-page. Low-yield pages are sent to per-page Typhoon."""
+    doc = fitz.open(str(pdf_path))
+    pages: list[PageText] = []
+
+    for i, page in enumerate(doc):
+        text = page.get_text("text")
+        method = "pymupdf"
+
+        if _should_ocr_page(text):
+            b64 = base64.b64encode(
+                page.get_pixmap(dpi=_PAGE_OCR_DPI).tobytes("png")
+            ).decode()
+            ocr_text = _extract_page_typhoon(b64)
+            if ocr_text.strip():
+                text = ocr_text
+                method = "typhoon_page"
+                if verbose:
+                    safe_print(f"  [typhoon] ✓ page {i + 1} ({len(text)} chars)")
+
+        pages.append(PageText(page_num=i, text=text, extraction_method=method))
+
     doc.close()
     return pages
-
-
-# ─────────────────────────────────────────
-# Gemini Files API extraction (scanned / whole-PDF)
-# ─────────────────────────────────────────
-
-PDF_EXTRACT_PROMPT = (
-    "Extract all text from this PDF document. "
-    "Preserve Thai text exactly as written. "
-    "Output only the extracted text with no commentary."
-)
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=2, min=15, max=120),
-    retry=retry_if_exception(is_transient_error),
-    reraise=True,
-)
-def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
-    """Upload the entire PDF to Gemini Files API and extract text in one call."""
-    client = _get_client()
-
-    # Write to a temp file with ASCII path — avoids Windows SDK encoding bugs
-    # with Thai characters in file paths.
-    tmp_fd, tmp_name = tempfile.mkstemp(suffix=".pdf")
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(tmp_fd, "wb") as f:
-            f.write(pdf_path.read_bytes())
-
-        if verbose:
-            safe_print(f"  Uploading {pdf_path.name} to Gemini Files API …")
-
-        uploaded = client.files.upload(
-            file=tmp_path,
-            config=types.UploadFileConfig(mime_type="application/pdf"),
-        )
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    # Wait until the file is ACTIVE (usually immediate)
-    file_ref = uploaded
-    for _ in range(15):
-        if file_ref.state and file_ref.state.name == "ACTIVE":
-            break
-        time.sleep(2)
-        file_ref = client.files.get(name=uploaded.name)
-
-    if verbose:
-        safe_print("  File active — extracting text …")
-
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                types.Part.from_uri(file_uri=file_ref.uri, mime_type="application/pdf"),
-                types.Part.from_text(text=PDF_EXTRACT_PROMPT),
-            ],
-        )
-    finally:
-        # Always clean up uploaded file
-        try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            pass
-
-    return response.text or ""
 
 
 # ─────────────────────────────────────────
@@ -133,39 +107,43 @@ def _extract_with_gemini_files(pdf_path: Path, verbose: bool = False) -> str:
 
 def extract_text(
     pdf_path: str | Path,
-    use_vision_fallback: bool = True,
+    use_vision_fallback: bool = True,  # kept for call-site compatibility, ignored
     verbose: bool = False,
 ) -> list[PageText]:
-    """Extract text from a PDF.
+    """Extract text from a PDF using PyMuPDF + optional per-page Typhoon for image pages.
 
-    1. PyMuPDF (free, instant).
-    2. If total chars < threshold AND fallback enabled → Gemini Files API (1 API call).
+    If total extracted chars < SCANNED_CHAR_THRESHOLD, all pages are marked 'scanned'
+    and no OCR is attempted. Re-enable full OCR by importing extract_with_ocr from
+    kuru.ingestion.ocr_extractor.
     """
     pdf_path = Path(pdf_path)
-    pages = _extract_pymupdf(pdf_path)
+    pages = _build_page_texts(pdf_path, verbose=verbose)
     total_chars = sum(len(p.text.strip()) for p in pages)
 
-    if total_chars >= SCANNED_CHAR_THRESHOLD or not use_vision_fallback:
-        return pages
+    if total_chars < SCANNED_CHAR_THRESHOLD:
+        if verbose:
+            safe_print(
+                f"  Low text yield ({total_chars} chars) — marking as scanned. "
+                "OCR disabled; import ocr_extractor.extract_with_ocr to re-enable."
+            )
+        for p in pages:
+            p.extraction_method = "scanned"
 
-    if verbose:
-        safe_print(f"  Low text yield ({total_chars} chars) — using Gemini Files API")
+    return pages
 
-    try:
-        text = _extract_with_gemini_files(pdf_path, verbose=verbose)
-        return [PageText(page_num=0, text=text, extraction_method="gemini_files")]
-    except Exception as exc:
-        safe_print(f"  Gemini Files extraction failed ({type(exc).__name__}): {exc}")
-        return [PageText(page_num=0, text="", extraction_method="failed")]
+
+def render_page_b64(pdf_path: Path, page_num: int, dpi: int = 150) -> str:
+    """Render a single PDF page to a base64 PNG string."""
+    doc = fitz.open(str(pdf_path))
+    pix = doc[page_num].get_pixmap(dpi=dpi)
+    doc.close()
+    return base64.b64encode(pix.tobytes("png")).decode()
 
 
 def extract_text_from_docx(docx_path: Path) -> list[PageText]:
-    """Extract text from a DOCX file using python-docx.
-
-    Includes body paragraphs and table cell text.
-    """
+    """Extract text from a DOCX file using python-docx."""
     try:
-        import docx  # python-docx
+        import docx  # python-docx  # noqa: PLC0415
 
         doc = docx.Document(str(docx_path))
         parts: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]

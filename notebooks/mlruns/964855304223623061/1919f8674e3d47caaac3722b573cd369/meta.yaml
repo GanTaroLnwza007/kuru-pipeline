@@ -1,0 +1,14 @@
+artifact_uri: file:///D:/work/project/main_workspace/kuru/pipeline/notebooks/mlruns/964855304223623061/1919f8674e3d47caaac3722b573cd369/artifacts
+end_time: 1778457059424
+entry_point_name: ''
+experiment_id: '964855304223623061'
+lifecycle_stage: active
+run_id: 1919f8674e3d47caaac3722b573cd369
+run_name: baseline
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1778456900414
+status: 3
+tags: []
+user_id: User

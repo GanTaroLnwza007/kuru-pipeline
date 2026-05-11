@@ -32,8 +32,8 @@ def _token_estimate(text: str) -> int:
 
 SECTION_PATTERNS: list[tuple[str, str]] = [
     ("plo",       r"ผลการเรียนรู้ที่คาดหวัง|ผลลัพธ์การเรียนรู้|PLO|Program Learning Outcome"),
+    ("admission", r"การรับเข้าศึกษา|เกณฑ์การรับ|คุณสมบัติผู้สมัคร|รับนิสิต|นิสิตต่างชาติ|รับทั้งนิสิต|admission|GPAX|TCAS"),
     ("course",    r"โครงสร้างหลักสูตร|รายวิชา|Course|หมวดวิชา"),
-    ("admission", r"การรับเข้าศึกษา|เกณฑ์การรับ|คุณสมบัติผู้สมัคร|admission|GPAX|TCAS"),
     ("general",   r"ปรัชญา|วัตถุประสงค์|ความสำคัญ|Introduction|หลักสูตร"),
 ]
 
@@ -81,9 +81,14 @@ def _char_chunks(text: str, section_type: str, start_index: int) -> list[Chunk]:
 
         piece = piece.strip()
         if piece:
+            # Re-detect section from chunk content — overrides block-level detection when
+            # a subsection (e.g. "5.3 การรับเข้าศึกษา") sits inside a larger block that
+            # was classified differently (e.g. "course").
+            chunk_section = _detect_section(piece[:300])
+            effective_section = chunk_section if chunk_section != "general" else section_type
             chunks.append(Chunk(
                 content=piece,
-                section_type=section_type,
+                section_type=effective_section,
                 chunk_index=idx,
                 token_count=_token_estimate(piece),
             ))

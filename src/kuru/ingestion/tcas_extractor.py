@@ -3,34 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import supabase_client as db
 from kuru.ingestion.text_extractor import extract_text, full_text
 from kuru.ingestion.utils import is_transient_error, safe_print
-
-load_dotenv()
-
-_client: genai.Client | None = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+from kuru.llm import LLM_MODEL, get_client
 
 # Maximum sheets processed per xlsx workbook — guard against runaway API costs.
 MAX_XLSX_SHEETS = 20
@@ -50,6 +33,15 @@ class TCASRecord(BaseModel):
     portfolio_requirements: dict[str, Any] | None = Field(default=None)
     deadlines: dict[str, Any] | None = Field(default=None)
 
+    @field_validator("gpax_min")
+    @classmethod
+    def _gpax_must_be_on_4_scale(cls, v: float | None) -> float | None:
+        # GPAX is 0.0–4.0. Values > 4.0 mean the extractor confused a score weight
+        # percentage (e.g. "GPAX 20%") with the minimum GPA — discard them.
+        if v is not None and v > 4.0:
+            return None
+        return v
+
 
 EXTRACTION_PROMPT = """You are a structured data extractor for Thai university admission documents.
 
@@ -59,8 +51,8 @@ Return a JSON array where each element is an admission record with these fields:
 - faculty: faculty/department name
 - round: "round1", "round2", "round3", or "round4"
 - quota: number of available seats (integer, null if not found)
-- gpax_min: minimum GPAX requirement (float, null if not found)
-- exam_criteria: object with exam names as keys, e.g. {"TGAT": {"weight": 0.3}, "TPAT3": {"weight": 0.7}}
+- gpax_min: minimum cumulative GPA (GPAX) on a 4.0 scale (e.g. 2.75, 3.00, 3.25). Must be between 0.0 and 4.0. If GPAX appears as a score weight percentage (e.g. "GPAX 20%"), that is a weight — NOT a minimum GPA, leave null.
+- exam_criteria: object with exam names as keys and percentage weights (0–100), e.g. {"TGAT": {"weight": 30}, "TPAT3": {"weight": 70}}
 - portfolio_requirements: object describing portfolio items required
 - deadlines: object with date keys, e.g. {"apply_start": "2025-10-01", "apply_end": "2025-10-10"}
 
@@ -76,15 +68,13 @@ Document text:
 # ─────────────────────────────────────────
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
-def _call_gemini(text: str) -> str:
-    response = _get_client().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.replace("{text}", text[:200000]),
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-        ),
+def _call_llm(text: str) -> str:
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": EXTRACTION_PROMPT.replace("{text}", text[:200000])}],
+        temperature=0.0,
     )
-    return response.text or "[]"
+    return response.choices[0].message.content or "[]"
 
 
 def _parse_records(raw_json: str) -> list[dict[str, Any]]:
@@ -129,7 +119,7 @@ def extract_tcas_from_pdf(
     if verbose:
         safe_print(f"  Extracted {len(doc_text)} chars. Calling Gemini for structured extraction …")
 
-    return _build_records(_parse_records(_call_gemini(doc_text)))
+    return _build_records(_parse_records(_call_llm(doc_text)))
 
 
 def _sheet_to_text(ws: Any) -> str:
@@ -173,7 +163,7 @@ def extract_tcas_from_xlsx(
             safe_print(f"    Sheet '{sheet_name}': {len(text)} chars -> Gemini ...")
 
         sheet_new = 0
-        for rec in _build_records(_parse_records(_call_gemini(text))):
+        for rec in _build_records(_parse_records(_call_llm(text))):
             key = f"{rec.program_name_raw}|{rec.round}"
             if key not in seen:
                 seen.add(key)

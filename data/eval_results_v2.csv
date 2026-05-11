@@ -1,0 +1,227 @@
+question,ground_truth_answer,rag_answer,score,reasoning,question_type,source_file,program_id,section_type,sources_used
+ระบบการรับนิสิตของหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชา วนศาสตร์ เป็นอย่างไร?,ระบบการรับนิสิตของหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชา วนศาสตร์ สอดคล้องกับนโยบายการรับนิสิตของมหาวิทยาลัยเกษตรศาสตร์ โดยมีขั้นตอนการรับนิสิตที่ระบุไว้อย่างชัดเจนในรายละเอียดหลักสูตร,"สวัสดีครับน้อง! พี่เข้าใจว่าน้องกำลังสนใจระบบการรับนิสิตของหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาวนศาสตร์ ใช่ไหมครับ
+
+จากข้อมูลที่พี่มี หลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาวนศาสตร์ มีระบบการรับนิสิตที่สอดคล้องกับนโยบายของมหาวิทยาลัยเกษตรศาสตร์เลยครับ โดยจะมีการระบุคุณลักษณะของบัณฑิตที่พึงประสงค์ไว้อย่างชัดเจนในรายละเอียดหลักสูตรครับ
+
+นอกจากนี้ พี่เจอข้อมูลเกี่ยวกับการรับสมัครใน TCAS ด้วยนะครับ ซึ่งมีรายละเอียดดังนี้ครับ:
+
+*   **รอบที่ 1 (Portfolio/Talent)**
+    *   **โควตาช้างเผือก:** มีจำนวนรับ 250 คน โดยจะพิจารณาจาก **Portfolio** (ไม่เกิน 10 หน้า) ที่เกี่ยวกับประวัติผลงานด้านการอนุรักษ์ทรัพยากรธรรมชาติและสิ่งแวดล้อม หรือผลงานการแข่งขัน/ประกวดด้านนี้ หรือด้านวิทยาศาสตร์ และจะมีการ **สัมภาษณ์** ด้วยครับ (Source: 69\_TCAS1\_ช้างเผือก(1.1)\_ประกาศรับสมัคร-ลงนาม.pdf)
+    *   **โควตานักกีฬาดีเด่นฯ:** มีจำนวนรับ 2 คน (Source: 69\_TCAS1\_นักกีฬาดีเด่นฯ(1.1)\_ประกาศรับสมัคร-ลงนาม.pdf)
+    *   **โควตาเรียนล่วงหน้า:** มีจำนวนรับ 5 คน โดยมีเกณฑ์คะแนนรายวิชาดังนี้ครับ:
+        *   เคมี: ≥C\*
+        *   ฟิสิกส์: ≥C\*
+        *   ชีววิทยา: ≥C\*
+        *   English for Everyday Life: ≥C\*
+        (Source: 69\_TCAS1\_เรียนล่วงหน้า(1.1)\_ประกาศรับสมัคร-ลงนาม.pdf)
+
+*   **รอบที่ 3 (Admission)**
+    *   มีจำนวนรับ 30 คน โดยใช้เกณฑ์คะแนนสอบดังนี้ครับ:
+        *   TGAT: น้ำหนัก 50%
+        *   A-Level: น้ำหนัก 50%
+        *   โดย A-Level ที่พิจารณาคือ คณิตศาสตร์ (22%) และ วิทยาศาสตร์ (12%)
+        (Source: 69-TCAS3-เกณฑ์การคัดเลือก-OK.xlsx)
+
+นอกจากนี้ ยังมีข้อมูลว่าหลักสูตรนี้เปิดรับทั้งนิสิตไทยและนิสิตต่างชาติด้วยครับ
+
+พี่ไม่พบข้อมูลเกี่ยวกับเกณฑ์ GPAX ขั้นต่ำสำหรับหลักสูตรนี้ในเอกสารที่พี่มีนะครับ
+
+ถ้ามีอะไรที่อยากทราบเพิ่มเติม หรืออยากให้พี่ช่วยดูข้อมูลส่วนไหนอีก บอกได้เลยนะครับ!",2,"The RAG answer correctly identifies that the admission system aligns with Kasetsart University's policies and that the desired graduate characteristics are specified in the curriculum details. However, it provides extensive details about TCAS rounds which are not present in the ground truth, making it partially correct but not fully aligned with the provided ground truth.",admission,วท.บ._วนศาสตร์_2567.pdf,bangkhen_forest_39169b95,admission,วท.บ._วนศาสตร์_2567.pdf|วท.บ._วนศาสตร์_2567.pdf|วท.บ._วนศาสตร์_2567.pdf
+What does the course 'Curriculum Development' (01162212) in the ศษ.บ. พลศึกษา (5 ปี) program at KU focus on?,"This course focuses on principles, concepts, and theories of curriculum development, standards-based curriculum construction, analysis, implementation, learning management design, and systematic evaluation for improvement.","Hello there! I can help you with that.
+
+The course ""Curriculum Development"" (01162212) in the Bachelor of Education in Physical Education (5-year program) at Kasetsart University focuses on the principles, concepts, and theories of curriculum development. It covers standards-based school curriculum development, how to construct, analyze, and implement curricula for designing learning experiences. Additionally, it delves into curriculum evaluation and how to systematically use evaluation results for curriculum improvement, as well as discussing current problems and trends in curriculum development.
+
+[Source: ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf]
+
+Let me know if you have any other questions!",3,"The RAG answer accurately and completely covers all the key aspects of the course as described in the ground truth, including principles, concepts, theories, standards-based development, construction, analysis, implementation, learning management design, systematic evaluation, and improvement.",curriculum,ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf,bangkhen_edu_76832b68,general,ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf|ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf|ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf
+"For the Chemical Engineering program at KU, how many credits are required for specialized courses (วิชาเฉพาะ)?",The Chemical Engineering program requires not less than 107 credits for specialized courses.,"Hello there! It's great you're interested in Chemical Engineering at Kasetsart University. I can help you with that.
+
+According to the documents I have, the specialized courses (วิชาเฉพาะ) for the Bachelor of Engineering Program in Chemical Engineering require **not less than 107 credits**. This is further broken down into:
+
+*   **Fundamental Specialized Courses (วิชาเฉพาะพื้นฐาน):** 44 credits
+*   **Major Specialized Courses (วิชาเฉพาะด้าน):** 63 credits
+
+So, the total for specialized courses is indeed 107 credits.
+
+Let me know if you have any other questions!",3,The RAG answer correctly identifies the total required credits for specialized courses and provides a breakdown that sums up to the correct total.,curriculum,"67BThai-02ChemE สาขาวิชาวิศวกรรมเคมี (ปกติ,พิเศษ).pdf",bangkhen_a612dbb4,course,"67BThai-02ChemE สาขาวิชาวิศวกรรมเคมี (ปกติ,พิเศษ).pdf|67BThai-02ChemE สาขาวิชาวิศวกรรมเคมี (ปกติ,พิเศษ).pdf|67BThai-02ChemE สาขาวิชาวิศวกรรมเคมี (ปกติ,พิเศษ).pdf"
+Does the นานาชาติ program at Kasetsart University accept students with a GPAX of 80 and a GED of 6.0?,"Yes, the นานาชาติ program at Kasetsart University accepts students with a GPAX of 80 and a GED of 6.0.","Hello there! I can help you with that. You're asking if Kasetsart University's international programs accept students with a GPAX of 80 and a GED of 6.0.
+
+Based on the information I have, it looks like some international programs have specific requirements for GPAX and GED.
+
+For example, the B.Acc. program at Thammasat University (which seems to be listed in relation to KU's international programs) has a GPAX requirement of 80 and a GED of 6.0.
+
+However, the context doesn't provide a comprehensive list of all international programs and their exact requirements. Some programs, like the วท.บ. สาขาวิชาเกษตรเขตร้อน (นานาชาติ), วท.บ. สาขาวิชาเคมีบูรณาการ (นานาชาติ), and others, do not list a minimum GPAX requirement in the provided TCAS data.
+
+To get the most accurate and complete information for the specific international program you're interested in at Kasetsart University, I highly recommend checking the official Kasetsart University admissions website or contacting the faculty directly.
+
+Is there anything else I can help you look up regarding admission requirements or program details?",1,The RAG answer is tangentially related because it discusses GPAX and GED requirements for international programs but incorrectly references another university and fails to directly confirm or deny the requirements for Kasetsart University.,admission,หลักสูตรนานาชาติ final หลังผ่านกรรมการการศึกษา มก final_20250625.pdf,bangkhen_1ca687c1,admission,หลักสูตรนานาชาติ final หลังผ่านกรรมการการศึกษา มก final_20250625.pdf|หลักสูตรนานาชาติ final หลังผ่านกรรมการการศึกษา มก final_20250625.pdf|หลักสูตรนานาชาติ final หลังผ่านกรรมการการศึกษา มก final_20250625.pdf
+How many credits are required for the 'Languages and Communication' general education component in the Civil Engineering program at KU?,"The 'Languages and Communication' general education component in the Civil Engineering program at KU requires no less than 13 credits. This includes Thai language courses, Foreign Language 1 courses (9 credits), and Information/Computer courses (at least 1 credit).","Hello there! I can help you with that.
+
+For the Civil Engineering program at Kasetsart University, the 'Languages and Communication' general education component requires no less than 13 credits.
+
+This includes:
+*   Thai Language: 3 credits
+*   Foreign Language (1 language): 9 credits
+*   Information/Computer: at least 1 credit
+
+I hope this helps you plan your studies! Let me know if you have any other questions.",3,The RAG answer accurately reflects the ground truth by stating the total credit requirement and breaking it down into the specified components with their respective credit values.,curriculum,67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf,bangkhen_95070360,course,67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf|67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf|67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf
+ในหมวดวิชาศึกษาทั่วไปของหลักสูตรวิศวกรรมโยธา ต้องเรียนกลุ่มสาระอยู่ดีมีสุขกี่หน่วยกิต และต้องเลือกเรียนวิชาอะไรบ้าง?,ในหมวดวิชาศึกษาทั่วไปของหลักสูตรวิศวกรรมโยธา ต้องเรียนกลุ่มสาระอยู่ดีมีสุขไม่น้อยกว่า 7 หน่วยกิต โดยต้องลงทะเบียนวิชากิจกรรมพลศึกษา 1(0-2-1) และเลือกเรียนอีกไม่น้อยกว่า 6 หน่วยกิตจากรายวิชาในกลุ่มสาระนี้,"สวัสดีครับน้อง! ยินดีด้วยนะครับที่สนใจคณะวิศวกรรมศาสตร์ สาขาวิศวกรรมโยธาของมหาวิทยาลัยเกษตรศาสตร์ครับ
+
+สำหรับหมวดวิชาศึกษาทั่วไปของหลักสูตรวิศวกรรมโยธา น้องจะต้องเรียน **กลุ่มสาระอยู่ดีมีสุข ไม่น้อยกว่า 7 หน่วยกิต** ครับ
+
+จากข้อมูลที่ผมมีนะครับ ในกลุ่มสาระอยู่ดีมีสุขนี้ จะมีวิชา **""กิจกรรมพลศึกษา""** ซึ่งเป็นวิชาบังคับ 1 หน่วยกิต และที่เหลืออีกไม่น้อยกว่า 6 หน่วยกิต น้องสามารถเลือกเรียนจากรายวิชาอื่นๆ ในกลุ่มสาระนี้ได้ครับ
+
+ถ้ามีอะไรสงสัยเพิ่มเติม ถามผมได้เลยนะครับ ยินดีช่วยเหลือเสมอครับ!",3,The RAG answer correctly identifies the total credit requirement for the 'อยู่ดีมีสุข' category and specifies the compulsory 'กิจกรรมพลศึกษา' course along with the option to choose other courses within the category.,curriculum,67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf,bangkhen_95070360,course,67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf|67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf|67BThai-03CE สาขาวิชาวิศวกรรมโยธา (ปกติ).pdf
+การรับนิสิตเข้าศึกษาในหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาการจัดการสิ่งแวดล้อม ใช้ระบบการคัดเลือกแบบใด?,หลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาการจัดการสิ่งแวดล้อม ดำเนินการรับนิสิตผ่านระบบการคัดเลือกเข้าอุดมศึกษากลาง (TCAS) ของมหาวิทยาลัยเกษตรศาสตร์,"สวัสดีครับน้อง! ยินดีด้วยนะครับที่สนใจหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาการจัดการสิ่งแวดล้อม ของมหาวิทยาลัยเกษตรศาสตร์ครับ
+
+สำหรับคำถามเรื่องระบบการคัดเลือกเข้าศึกษา ผมหาข้อมูลมาให้แล้วครับ หลักสูตรนี้จะรับนิสิตผ่าน **ระบบการคัดเลือกเข้าอุดมศึกษากลาง (TCAS)** ของมหาวิทยาลัยเกษตรศาสตร์ครับ โดยจะมีคณะกรรมการประจำหลักสูตรระดับปริญญาตรีคอยพิจารณาคัดเลือกผู้ที่มีคุณสมบัติตรงตามเงื่อนไขที่หลักสูตรกำหนดไว้ครับ
+
+นอกจากนี้ หลักสูตรยังมีการวางแผนและกำหนดจำนวนการรับนิสิตในแต่ละปีการศึกษาให้เป็นไปตามแผนที่วางไว้อย่างมีประสิทธิภาพด้วยครับ
+
+ถ้ามีอะไรสงสัยเพิ่มเติม ถามผมได้เลยนะครับ ยินดีช่วยเหลือเสมอครับ!",3,"The RAG answer correctly identifies that the admission process uses the TCAS system, which is the key information from the ground truth.",admission,วท.บ._การจัดการสิ่งแวดล้อม_2569.pdf,bangkhen_envi_fedd82d0,admission,วท.บ._การจัดการสิ่งแวดล้อม_2569.pdf|วท.บ._การจัดการสิ่งแวดล้อม_2569.pdf|วท.บ._การจัดการสิ่งแวดล้อม_2569.pdf
+What are the core concepts covered in the 'Education for Sustainable Development' topic within the ศษ.บ. พลศึกษา (5 ปี) program at KU?,"The program covers philosophies, concepts, and theories in education, religion, economy, society, and culture, along with strategies for promoting sustainable development and their application in school improvement.","Hello there, น้อง! I'd be happy to help you understand the core concepts of 'Education for Sustainable Development' in the Bachelor of Education in Physical Education (5-year program) at Kasetsart University.
+
+Based on the information I have, the 'Education for Sustainable Development' topic covers:
+
+*   Philosophies, concepts, and theories related to education, religion, economy, society, and culture.
+*   Concepts and instructional strategies that promote sustainable development.
+*   Applications for school improvement.
+*   Analysis on education for sustainable development.
+
+This seems to be a really important area of study within the program, focusing on how education can contribute to a more sustainable future.
+
+Do you have any other questions about this program or other topics, น้อง? I'm here to help!",3,"The RAG answer accurately identifies and lists all the core concepts mentioned in the ground truth, including philosophies, concepts, theories, strategies, and applications for school improvement.",curriculum,ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf,bangkhen_edu_76832b68,general,ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf|ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf|ศษ.บ._พลศึกษา_(5_ปี)_2558.pdf
+หลักสูตรรัฐประศาสนศาสตร์ ของ มก. รับนิสิตประเภทใดบ้าง?,หลักสูตรรัฐประศาสนศาสตร์ ของ มก. รับทั้งนิสิตไทยและนิสิตต่างชาติ,"สวัสดีครับน้อง! ดีใจที่น้องสนใจหลักสูตรรัฐประศาสนศาสตร์ของมหาวิทยาลัยเกษตรศาสตร์นะครับ ผมหาข้อมูลมาให้แล้วครับ
+
+สำหรับหลักสูตรศิลปศาสตรบัณฑิต สาขาวิชารัฐประศาสนศาสตร์ จะรับทั้งนิสิตไทยและนิสิตต่างชาติครับ
+
+หากน้องมีคำถามเพิ่มเติมเกี่ยวกับหลักสูตรนี้ หรือต้องการข้อมูลส่วนไหนอีก ถามผมได้เลยนะครับ ยินดีช่วยเหลือเสมอครับผม",3,"The RAG answer correctly identifies that the Public Administration program at Kasetsart University accepts both Thai and international students, matching the ground truth.",admission,ศศ.บ. สาขาวิชา รัฐประศาสนศาสตร์ .pdf,bangkhen_579eaed1,admission,ศศ.บ. สาขาวิชา รัฐประศาสนศาสตร์ .pdf|ศศ.บ. สาขาวิชา รัฐประศาสนศาสตร์ .pdf|ศศ.บ. สาขาวิชา รัฐประศาสนศาสตร์ .pdf
+What is the minimum credit requirement for the 'Languages and Communication' general education component in the Industrial Engineering program at KU?,The minimum credit requirement for the 'Languages and Communication' general education component in the Industrial Engineering program at KU is not less than 15 credits.,"Hello there, น้อง! I can help you with that.
+
+I looked through the documents, and it seems the information about the specific credit requirement for the 'Languages and Communication' general education component in the Industrial Engineering program isn't explicitly detailed in the provided texts.
+
+However, the curriculum structure does mention a ""กลุ่มสาระภาษากับการสื่อสาร (L = Languages and Communication)"" which is part of the general education courses. The documents show a breakdown of credit requirements for the program, with specific mentions of ""วิชาเฉพาะด้าน"" (Specialized Subjects) and ""กลุ่มวิชาบังคับทางวิศวกรรม"" (Compulsory Engineering Subjects), and ""กลุ่มวิชาเลือกทางวิศวกรรม"" (Elective Engineering Subjects).
+
+For the most accurate and up-to-date information on the exact credit breakdown for general education components like 'Languages and Communication', I would recommend checking the official Kasetsart University website (ku.ac.th) or contacting the Faculty of Engineering directly.
+
+Is there anything else I can help you find regarding the Industrial Engineering program?",0,"The RAG answer incorrectly states that the information is not explicitly detailed, despite the ground truth providing the exact credit requirement.",curriculum,"67BThai-06IE สาขาวิชาวิศวกรรมอุตสาหการ (ปกติ,พิเศษ,ภาษาอังกฤษ).pdf",bangkhen_65e17156,course,"67BThai-06IE สาขาวิชาวิศวกรรมอุตสาหการ (ปกติ,พิเศษ,ภาษาอังกฤษ).pdf|67BThai-06IE สาขาวิชาวิศวกรรมอุตสาหการ (ปกติ,พิเศษ,ภาษาอังกฤษ).pdf|67BThai-06IE สาขาวิชาวิศวกรรมอุตสาหการ (ปกติ,พิเศษ,ภาษาอังกฤษ).pdf"
+What is the minimum credit requirement for the 'General Education' category in the วิศวกรรมไฟฟ้าเครื่องกลการผลิต program at KU?,The minimum credit requirement for the 'General Education' category in the วิศวกรรมไฟฟ้าเครื่องกลการผลิต program at KU is not less than 30 credits.,"Hello there! I can help you with that.
+
+I looked through the documents you provided, and I found information about the curriculum for the Bachelor of Engineering Program in Electrical-Mechanical Manufacturing Engineering. However, the documents detail specific courses and their credit values, as well as the structure of the program with different subject categories like ""กลุ่มสาระภาษากับการสื่อสาร"" (Language and Communication) or ""กลุ่มสาระศาสตร์แห่งผู้ประกอบการ"" (Entrepreneurship).
+
+Unfortunately, I couldn't find a specific mention of the total minimum credit requirement for the ""General Education"" category within these documents.
+
+For the most accurate and up-to-date information on credit requirements, I would recommend checking the official Kasetsart University website or contacting the Faculty of Engineering directly.
+
+Is there anything else I can help you find regarding the Electrical-Mechanical Manufacturing Engineering program?",0,"The RAG answer incorrectly states that the minimum credit requirement for 'General Education' was not found, despite the ground truth explicitly providing this information.",curriculum,"67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf",bangkhen_524aa3dd,course,"67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf|67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf|67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf"
+"For the Materials Engineering program at KU, what is the minimum credit requirement for the 'Languages and Communication' component within the General Education courses?",The Materials Engineering program requires a minimum of 15 credits for the 'Languages and Communication' component under General Education courses.,"Hello there! I can help you with information about the Materials Engineering program at Kasetsart University.
+
+Regarding your question about the minimum credit requirement for 'Languages and Communication' within the General Education courses, I couldn't find that specific detail in the provided documents. The information I have focuses on the curriculum structure and specific courses within the Materials Engineering program itself, as well as TCAS admission data.
+
+For details on the General Education course requirements, including the credit breakdown for components like 'Languages and Communication,' I recommend checking the official Kasetsart University website or contacting the Faculty of Engineering directly.
+
+Is there anything else I can help you with regarding the Materials Engineering program, perhaps about its courses or admission rounds?",0,"The RAG answer states it could not find the information, while the ground truth clearly provides the minimum credit requirement.",curriculum,"67BThai-13MatE-Regular สาขาวิชาวิศวกรรมวัสดุ (ปกติ,พิเศษ).pdf",bangkhen_282b5991,course,"67BThai-13MatE-Regular สาขาวิชาวิศวกรรมวัสดุ (ปกติ,พิเศษ).pdf|67BThai-13MatE-Regular สาขาวิชาวิศวกรรมวัสดุ (ปกติ,พิเศษ).pdf|67BThai-13MatE-Regular สาขาวิชาวิศวกรรมวัสดุ (ปกติ,พิเศษ).pdf"
+ในหลักสูตรวิศวกรรมคอมพิวเตอร์ ต้องเรียนหมวดวิชาศึกษาทั่วไปกี่หน่วยกิต และแบ่งเป็นกลุ่มย่อยอย่างไรบ้าง?,"หมวดวิชาศึกษาทั่วไปในหลักสูตรวิศวกรรมคอมพิวเตอร์ ต้องไม่น้อยกว่า 30 หน่วยกิต โดยแบ่งเป็นกลุ่มย่อย ได้แก่ กลุ่มสาระอยู่ดีมีสุข (ไม่น้อยกว่า 7 หน่วยกิต), กลุ่มสาระศาสตร์แห่งผู้ประกอบการ (ไม่น้อยกว่า 3 หน่วยกิต), กลุ่มสาระภาษากับการสื่อสาร (ไม่น้อยกว่า 15 หน่วยกิต), กลุ่มสาระพลเมืองไทยและพลเมืองโลก (ไม่น้อยกว่า 2 หน่วยกิต), และกลุ่มสาระสุนทรียศาสตร์ (ไม่น้อยกว่า 3 หน่วยกิต).","สวัสดีครับน้อง! ยินดีด้วยที่สนใจหลักสูตรวิศวกรรมคอมพิวเตอร์ของมหาวิทยาลัยเกษตรศาสตร์นะครับ ผมหาข้อมูลเกี่ยวกับหมวดวิชาศึกษาทั่วไปมาให้น้องแล้วครับ
+
+ในหลักสูตรวิศวกรรมคอมพิวเตอร์ **หมวดวิชาศึกษาทั่วไป** ต้องเรียนไม่น้อยกว่า **30 หน่วยกิต** ครับ โดยแบ่งออกเป็นกลุ่มย่อยๆ ดังนี้ครับ:
+
+*   **กลุ่มสาระอยู่ดีมีสุข:** ไม่น้อยกว่า 7 หน่วยกิต
+*   **กลุ่มสาระศาสตร์แห่งผู้ประกอบการ:** ไม่น้อยกว่า 3 หน่วยกิต
+*   **กลุ่มสาระภาษากับการสื่อสาร:** ไม่น้อยกว่า 15 หน่วยกิต (ซึ่งจะรวมวิชาภาษาไทย, ภาษาต่างประเทศ และวิชาสารสนเทศ/คอมพิวเตอร์)
+*   **กลุ่มสาระพลเมืองไทยและพลเมืองโลก:** ไม่น้อยกว่า 2 หน่วยกิต
+*   **กลุ่มสาระสุนทรียศาสตร์:** ไม่น้อยกว่า 3 หน่วยกิต
+
+(Source: 67BThai-04CPE สาขาวิชาวิศวกรรมคอมพิวเตอร์ (ปกติ).pdf)
+
+หวังว่าข้อมูลนี้จะเป็นประโยชน์นะครับ ถ้ามีอะไรสงสัยอีก ถามผมได้เลยครับ!",3,The RAG answer correctly identifies the total number of general education credits and accurately lists all the sub-groups with their minimum credit requirements as stated in the ground truth.,curriculum,67BThai-04CPE สาขาวิชาวิศวกรรมคอมพิวเตอร์ (ปกติ).pdf,bangkhen_ddf705a9,course,67BThai-04CPE สาขาวิชาวิศวกรรมคอมพิวเตอร์ (ปกติ).pdf|67BThai-04CPE สาขาวิชาวิศวกรรมคอมพิวเตอร์ (ปกติ).pdf|67BThai-04CPE สาขาวิชาวิศวกรรมคอมพิวเตอร์ (ปกติ).pdf
+นิสิตหลักสูตรสัตวศาสตร์อุตสาหกรรม ที่สนใจไปศึกษาแลกเปลี่ยนต่างประเทศ สามารถเทียบโอนหน่วยกิตได้อย่างไร?,นิสิตหลักสูตรสัตวศาสตร์อุตสาหกรรม ที่สนใจไปศึกษาแลกเปลี่ยนต่างประเทศ สามารถนำรายวิชามาเทียบโอนหน่วยกิตผ่านรายวิชา 01002395 การศึกษาในต่างประเทศ และ 01002396 องค์ความรู้จากการศึกษาในต่างประเทศ,"สวัสดีครับน้อง! เข้าใจเลยว่าน้องสนใจเรื่องการไปแลกเปลี่ยนต่างประเทศนะครับ เป็นโอกาสที่ดีมากๆ เลยครับ
+
+สำหรับหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาสัตวศาสตร์อุตสาหกรรม ถ้าสนใจไปศึกษาแลกเปลี่ยนต่างประเทศ สามารถเทียบโอนหน่วยกิตได้ครับ โดยจะมีรายวิชาที่รองรับการเทียบโอนหน่วยกิตเหล่านี้ครับ
+
+*   **รายวิชา 01002395 การศึกษาในต่างประเทศ**
+*   **รายวิชา 01002396 องค์ความรู้จากการศึกษาในต่างประเทศ**
+
+การเทียบโอนหน่วยกิตจะเป็นไปตามเกณฑ์ของมหาวิทยาลัยเกษตรศาสตร์ครับ โดยนิสิตจะสามารถนำความรู้ที่ได้จากการศึกษาในต่างประเทศมาประยุกต์ใช้กับการศึกษาในสาขาวิชาสัตวศาสตร์ได้ครับ
+
+ถ้ามีคำถามเพิ่มเติม ถามผมได้เลยนะครับ ยินดีช่วยเหลือครับผม",3,"The RAG answer correctly identifies the two specific courses (01002395 and 01002396) that can be used for credit transfer for international exchange programs in the Industrial Animal Science curriculum, matching the ground truth precisely.",curriculum,วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf,bangkhen_agri_51ccd299,admission,วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf|วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf|วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf
+What is the minimum credit requirement for the 'Languages and Communication' general education component in the Digital Production Engineering (International Program) curriculum at KU?,The Digital Production Engineering (International Program) curriculum requires a minimum of 15 credits for the 'Languages and Communication' general education component.,"Hello there! I can help you with that.
+
+I looked through the curriculum details for the Bachelor of Engineering Program in Digital Manufacturing and Robotics Integration Engineering (International Program).
+
+For the 'Languages and Communication' general education component, the credit requirement is 3 credits. The breakdown of lecture, practical, and self-study hours is not specified in the provided documents.
+
+[Source: 67BThai-234DmriE-IUP สาขาวิชาวิศวกรรมการผลิตดิจิทัลฯ (นานาชาติ).pdf]
+
+Let me know if you have any other questions!",0,The RAG answer hallucinates a different program name and provides an incorrect credit requirement that contradicts the ground truth.,curriculum,67BThai-234DmriE-IUP สาขาวิชาวิศวกรรมการผลิตดิจิทัลฯ (นานาชาติ).pdf,bangkhen_d56eb1e6,course,67BThai-234DmriE-IUP สาขาวิชาวิศวกรรมการผลิตดิจิทัลฯ (นานาชาติ).pdf|67BThai-234DmriE-IUP สาขาวิชาวิศวกรรมการผลิตดิจิทัลฯ (นานาชาติ).pdf|67BThai-234DmriE-IUP สาขาวิชาวิศวกรรมการผลิตดิจิทัลฯ (นานาชาติ).pdf
+การรับเข้าศึกษาในหลักสูตร วท.บ. สาขาวิชาภูมิศาสตร์ ของมหาวิทยาลัยเกษตรศาสตร์ รับเฉพาะนักเรียนไทยหรือไม่?,หลักสูตร วท.บ. สาขาวิชาภูมิศาสตร์ ของมหาวิทยาลัยเกษตรศาสตร์ รับทั้งนิสิตไทยและนิสิตต่างชาติ,"สวัสดีครับน้อง! เข้าใจเลยว่าอยากรู้เรื่องการรับเข้าศึกษาของคณะที่สนใจนะครับ สำหรับหลักสูตร วท.บ. สาขาวิชาภูมิศาสตร์ ของมหาวิทยาลัยเกษตรศาสตร์นั้น จากข้อมูลที่ผมมี ผมยังไม่พบรายละเอียดที่ระบุชัดเจนว่ารับเฉพาะนักเรียนไทยหรือไม่ครับ
+
+อย่างไรก็ตาม โดยทั่วไปแล้ว การรับเข้าศึกษาในระดับปริญญาตรีของมหาวิทยาลัยรัฐบาลในประเทศไทยมักจะเปิดโอกาสให้นักเรียนไทยเป็นหลักครับ
+
+ถ้าอยากได้ข้อมูลที่แน่นอนที่สุด ผมแนะนำให้น้องลองเข้าไปดูที่เว็บไซต์หลักของมหาวิทยาลัยเกษตรศาสตร์ หรือติดต่อสอบถามโดยตรงกับทางคณะสังคมศาสตร์ ภาควิชาภูมิศาสตร์ ได้เลยครับ
+
+มีอะไรที่ผมพอจะช่วยหาข้อมูลเพิ่มเติมได้อีกไหมครับ?",1,"The RAG answer is tangentially related as it acknowledges the question but fails to provide a direct answer, instead offering general advice and stating that specific information is unavailable.",admission,วท.บ. สาขาวิชาภูมิศาสตร์.pdf,bangkhen_2a423ff9,admission,วท.บ. สาขาวิชาภูมิศาสตร์.pdf|วท.บ. สาขาวิชาภูมิศาสตร์.pdf|วท.บ. สาขาวิชาภูมิศาสตร์.pdf
+โครงสร้างหลักสูตรของสาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ) ที่ มก. มีหมวดวิชาอะไรบ้าง และแต่ละหมวดต้องเรียนกี่หน่วยกิต?,โครงสร้างหลักสูตรของสาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ) ประกอบด้วย หมวดวิชาศึกษาทั่วไปไม่น้อยกว่า 30 หน่วยกิต และหมวดวิชาเฉพาะไม่น้อยกว่า 95 หน่วยกิต,"สวัสดีครับน้อง! ยินดีด้วยนะครับที่สนใจสาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ) ของเราที่ มก. ผมหาข้อมูลโครงสร้างหลักสูตรมาให้น้องแล้วครับ
+
+หลักสูตรวิศวกรรมศาสตรบัณฑิต สาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (หลักสูตรนานาชาติ) จะแบ่งหมวดวิชาหลักๆ ดังนี้ครับ
+
+1.  **หมวดวิชาศึกษาทั่วไป:** ไม่น้อยกว่า 30 หน่วยกิต
+    *   กลุ่มสาระอยู่ดีมีสุข: ไม่น้อยกว่า 7 หน่วยกิต
+    *   กลุ่มสาระศาสตร์แห่งผู้ประกอบการ: ไม่น้อยกว่า 3 หน่วยกิต
+    *   กลุ่มสาระภาษากับการสื่อสาร: ไม่น้อยกว่า 15 หน่วยกิต
+    *   กลุ่มสาระพลเมืองไทยและพลเมืองโลก: ไม่น้อยกว่า 2 หน่วยกิต
+    *   กลุ่มสาระสุนทรียศาสตร์: ไม่น้อยกว่า 3 หน่วยกิต
+
+2.  **หมวดวิชาเฉพาะ:**
+    *   **สำหรับแผนการศึกษาสหกิจศึกษา:** ไม่น้อยกว่า 95 หน่วยกิต
+        *   วิชาแกน: 10 หน่วยกิต
+        *   วิชาเฉพาะด้าน: 75 หน่วยกิต (แบ่งเป็นกลุ่มย่อยๆ เช่น กลุ่มเทคโนโลยีและวิธีการทางซอฟต์แวร์, กลุ่มเทคโนโลยีเพื่องานประยุกต์, กลุ่มประเด็นด้านองค์การและระบบสารสนเทศ, กลุ่มโครงสร้างพื้นฐานของระบบ, กลุ่มฮาร์ดแวร์และสถาปัตยกรรมคอมพิวเตอร์, กลุ่มทักษะและเทคนิควิศวกรรมซอฟต์แวร์และความรู้, กลุ่มพื้นฐานคณิตศาสตร์และวิทยาศาสตร์)
+        *   วิชาเฉพาะเลือก: ไม่น้อยกว่า 10 หน่วยกิต (รวมวิชาเตรียมการโครงงานกลุ่มนวัตกรรมซอฟต์แวร์ด้วย)
+    *   **สำหรับนิสิตแลกเปลี่ยนต่างประเทศ:** ไม่น้อยกว่า 103 หน่วยกิต
+        *   วิชาแกน: 10 หน่วยกิต
+        *   วิชาเฉพาะด้าน: 75 หน่วยกิต (เหมือนกับแผนสหกิจศึกษา)
+        *   วิชาเฉพาะเลือก: 18 หน่วยกิต
+    *   **วิชาเลือกเสรี:** ไม่น้อยกว่า 6 หน่วยกิต (ทั้งสองแผนการศึกษา)
+    *   **วิชาประสบการณ์ภาคสนาม:**
+        *   แผนการศึกษาสหกิจศึกษา: 9 หน่วยกิต
+        *   แผนการศึกษานิสิตแลกเปลี่ยนต่างประเทศ: 1 หน่วยกิต
+
+ข้อมูลนี้อ้างอิงจากเอกสาร [67BThai-19SKedit2-IUP สาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ).pdf] ครับ
+
+มีอะไรอยากถามเพิ่มเติมอีกไหมครับ ยินดีช่วยเหลือเสมอครับ!",2,"The RAG answer correctly identifies the two main categories of subjects (general education and specialized subjects) and their minimum credit requirements, but it provides excessive detail about the sub-categories of specialized subjects which was not requested in the prompt.",curriculum,67BThai-19SKedit2-IUP สาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ).pdf,bangkhen_0a75bd0f,course,67BThai-19SKedit2-IUP สาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ).pdf|67BThai-19SKedit2-IUP สาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ).pdf|67BThai-19SKedit2-IUP สาขาวิชาวิศวกรรมซอฟต์แวร์และความรู้ (นานาชาติ).pdf
+How can international students in the วิทยาศาสตร์การประมงและเทคโนโลยี program at KU report complaints?,"International students in the วิทยาศาสตร์การประมงและเทคโนโลยี program can report complaints through their academic advisors, directly to the program faculty, via email, phone, or the dedicated LINE group for international students.","Hello there! It's great that you're looking into the details of the ""Fisheries Science and Technology (International Program)"" at Kasetsart University. I can help you with how international students can report complaints.
+
+According to the information I have, international students in this program have several channels to report complaints:
+
+*   **Through their academic advisor or faculty members** in the program.
+*   **Directly to the program committee or the program chair.**
+*   **Via a dedicated complaint box.**
+*   **Through a LINE group** that includes students and program administrators. This group is highlighted as a way for students to communicate easily with instructors, report problems, and get timely solutions.
+
+The program also mentions that they conduct satisfaction surveys for students and faculty annually and discuss these in meetings to propose further actions.
+
+I hope this helps you understand the complaint process! Let me know if you have any other questions.",2,The RAG answer correctly identifies several channels for reporting complaints but misses the specific mention of email and phone as direct contact methods.,admission,ปร.ด._วิทยาศาสตร์การประมงและเทคโนโลยี_(นานาชาติ)_2567.pdf,bangkhen_fish_563c2887,admission,ปร.ด._วิทยาศาสตร์การประมงและเทคโนโลยี_(นานาชาติ)_2567.pdf|ปร.ด._วิทยาศาสตร์การประมงและเทคโนโลยี_(นานาชาติ)_2567.pdf|ปร.ด._วิทยาศาสตร์การประมงและเทคโนโลยี_(นานาชาติ)_2567.pdf
+หลักสูตรวิศวกรรมไฟฟ้าเครื่องกลการผลิต ของ มก. ต้องเรียนกี่หน่วยกิตทั้งหมด?,หลักสูตรวิศวกรรมไฟฟ้าเครื่องกลการผลิต ของ มก. ต้องเรียนไม่น้อยกว่า 139 หน่วยกิตตลอดหลักสูตร,"สวัสดีครับน้อง! ยินดีด้วยนะครับที่สนใจหลักสูตรวิศวกรรมไฟฟ้าเครื่องกลการผลิต ของมหาวิทยาลัยเกษตรศาสตร์ครับ
+
+จากข้อมูลที่ผมมี ผมไม่พบรายละเอียดเกี่ยวกับจำนวนหน่วยกิตทั้งหมดที่ต้องเรียนตลอดหลักสูตรครับ แต่ผมเจอข้อมูลเกี่ยวกับโครงสร้างหลักสูตรบางส่วนครับ
+
+หลักสูตรนี้มีชื่อเต็มว่า **วิศวกรรมศาสตรบัณฑิต (วิศวกรรมไฟฟ้าเครื่องกลการผลิต)** ครับ
+
+ในส่วนของหมวดวิชาเลือกเสรี จะต้องเรียนไม่น้อยกว่า 6 หน่วยกิต และสำหรับการฝึกงาน จะต้องไม่น้อยกว่า 240 ชั่วโมง (ยกเว้นนิสิตที่เข้าโครงการสหกิจศึกษา) ครับ
+
+สำหรับรายละเอียดอื่นๆ เช่น จำนวนหน่วยกิตรวมทั้งหมด หรือรายละเอียดรายวิชาทั้งหมด ผมแนะนำให้น้องลองเข้าไปดูที่เว็บไซต์ของมหาวิทยาลัยเกษตรศาสตร์โดยตรง หรือติดต่อคณะวิศวกรรมศาสตร์โดยตรงเลยครับ
+
+มีอะไรให้ผมช่วยอีกไหมครับ?",0,"The RAG answer states that it cannot find the total number of credits required, while the ground truth clearly provides this information.",curriculum,"67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf",bangkhen_524aa3dd,course,"67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf|67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf|67BThai-11EMEedit2-Regular สาขาวิชาวิศวกรรมไฟฟ้าเครื่องกลการผลิต (ปกติ,พิเศษ).pdf"
+หลักสูตรสัตวศาสตร์อุตสาหกรรม มีวิชาอะไรบ้างที่เปิดโอกาสให้นิสิตได้เรียนรู้ผ่านการทำงานจริง?,หลักสูตรสัตวศาสตร์อุตสาหกรรม มีวิชา 01002490 สหกิจศึกษา ที่เปิดโอกาสให้นิสิตได้เรียนรู้ผ่านประสบการณ์การทำงานในสถานประกอบการ และวิชา 01002499 การกีฬานพิเศษ สำหรับนิสิตที่สนใจฝึกงานพิเศษเฉพาะด้านที่ตนสนใจเป็นพิเศษ,"สวัสดีครับน้อง! ยินดีด้วยนะครับที่สนใจหลักสูตรวิทยาศาสตรบัณฑิต สาขาวิชาสัตวศาสตร์อุตสาหกรรม ของมหาวิทยาลัยเกษตรศาสตร์ครับ
+
+จากข้อมูลที่ผมมี หลักสูตรนี้มีหลายวิชาที่เปิดโอกาสให้น้องๆ ได้เรียนรู้ผ่านการทำงานจริงเลยครับ
+
+*   **การฝึกงานพิเศษ (01002499):** วิชา นี้จะทำให้น้องๆ ได้ปฏิบัติงานโดยใช้ความรู้ทางด้านสัตวศาสตร์ในสาขาที่ตนเองสนใจเป็นพิเศษ ซึ่งจะช่วยพัฒนาทักษะและประสบการณ์ตรงในสถานประกอบการครับ
+*   **วิชาเฉพาะเลือก:** หลักสูตรมีวิชาเฉพาะเลือกที่หลากหลาย ให้น้องๆ ได้พัฒนาความรู้และทักษะด้านวิชาชีพที่สนใจเป็นพิเศษ ซึ่งจะเน้นทั้งหลักวิชาการและการลงมือปฏิบัติ
+*   **สหกิจศึกษา:** เป็นอีกช่องทางที่เปิดโอกาสให้น้องๆ ได้ฝึกฝนเรียนรู้ทักษะและประสบการณ์อาชีพอย่างต่อเนื่องผ่านการทำงานกับสถาบันหรือสถานประกอบการ
+*   **วิชางานพิเศษ:** คล้ายกับการฝึกงาน แต่น้องๆ อาจจะได้มีโอกาสทำงานในลักษณะที่หลากหลายมากขึ้น
+*   **การเรียนรู้ผ่านการทำโครงการ:** หลักสูตรมีการเรียนรู้ผ่านการทำโครงการที่เกี่ยวข้องกับทักษะวิชาชีพ
+*   **การเชิญสถานประกอบการมาร่วมให้ความรู้:** อาจารย์ผู้สอนจะเชิญผู้เชี่ยวชาญจากสถานประกอบการมาบรรยายให้น้องๆ ฟัง เพื่อให้น้องๆ ได้เรียนรู้ผ่านประสบการณ์จริง
+
+นอกจากนี้ ในช่วงชั้นปีที่ 3 และ 4 จะมีการเรียนการสอนที่เน้นความรู้ทางสัตวศาสตร์ควบคู่กับความรู้ด้านการจัดการธุรกิจ โดยเฉพาะในกลุ่มสัตว์เศรษฐกิจที่มีบทบาทในภาคอุตสาหกรรมครับ
+
+หวังว่าข้อมูลนี้จะเป็นประโยชน์นะครับ หากมีคำถามเพิ่มเติม ถามผมได้เลยนะครับ!",2,"The RAG answer correctly identifies ""สหกิจศึกษา"" and ""การฝึกงานพิเศษ"" but also includes other general learning methods not specifically mentioned in the ground truth as opportunities for practical work experience.",curriculum,วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf,bangkhen_agri_51ccd299,admission,วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf|วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf|วท.บ._สัตวศาสตร์อุตสาหกรรม_2568.pdf

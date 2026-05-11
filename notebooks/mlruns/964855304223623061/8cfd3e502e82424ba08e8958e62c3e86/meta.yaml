@@ -1,0 +1,14 @@
+artifact_uri: file:///D:/work/project/main_workspace/kuru/pipeline/notebooks/mlruns/964855304223623061/8cfd3e502e82424ba08e8958e62c3e86/artifacts
+end_time: 1778457174416
+entry_point_name: ''
+experiment_id: '964855304223623061'
+lifecycle_stage: active
+run_id: 8cfd3e502e82424ba08e8958e62c3e86
+run_name: wider_retrieval
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1778457059451
+status: 3
+tags: []
+user_id: User

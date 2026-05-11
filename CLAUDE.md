@@ -46,10 +46,14 @@ download_data.py also:
 
 Query:
   user question
-  -> detect TCAS round (e.g. "TCAS3" -> round3)
+  -> detect TCAS / PLO / listing query type
   -> embed with multilingual-e5 (query: prefix)
-  -> pgvector similarity search (fetch 3x top_k)
+  -> resolve program name (name_en match → name_th token match)
+  -> if resolved: targeted similarity_search filtered to that program_id (prepended)
+  -> pgvector similarity search via match_chunks RPC (probes=50, fetch 3x top_k)
   -> pythainlp tokenize question -> re-rank by filename match
+  -> inject coverage note if program has known data gaps (no PLOs, scanned, etc.)
+  -> if no chunks + no TCAS records: return honest "no data" message (no LLM call)
   -> if TCAS query:
        filter course chunks
        DB-level search per q_word + per chunk source file (5 records/program, round-preferred)
@@ -75,29 +79,32 @@ Query:
 
 ## Current Data State
 
-- **Curriculum**: บางเขน — 22 docs (20 PDFs + 1 DOCX + 1 image-only brochure recovered via OCR);
-  กพส — 1 PDF ingested; txt-redirect folder (กพส/ศวท) downloads on next `kuru-download`
+- **Curriculum**: บางเขน — 33 programs (~9,300 chunks); กพส — 1 program (~69 chunks);
+  กำแพงแสน and ศรีราชา not yet ingested (folder IDs needed)
 - **TCAS**: 2,524 records — 1,463 round1 (PDF) + 1,061 round3 (PDF + xlsx spreadsheet)
-- **Neo4j**: PLOs extracted for ingested programs (30 PLOs for กพส CPE, 4 for บูรณาการศาสตร์ DOCX)
+- **name_en**: populated for all 32 ingested บางเขน programs (enables English query resolution)
+- **IVFFlat**: `probes=50` — all 9,369 chunks searchable (see docs/ISSUES.md ISSUE-007)
 
 ## Known Issues / Limitations
 
-1. **PLO chunks missing for most engineering programs** — their PDFs use different section header
-   formats not matched by chunker patterns. PLO queries only work for:
-   - `วิศวกรรมโยธา-ชลประทาน` (civil engineering)
-   - `พยาบาลสัตว์` (animal nursing)
-   Fix: expand `SECTION_PATTERNS` in `chunker.py` and re-ingest.
+1. **Most engineering PDFs lack PLO sections** — compact course-catalog format; PLO queries
+   return "document does not contain PLO information." The LLM is told this via the coverage
+   note in the prompt. Fix: find full มคอ.2 PDFs or scrape from KU registrar website.
 
-2. **`แผ่นพับ วท.บ. (ศาสตร์แห่งแผ่นดินฯ).pdf`** — image-only brochure; now ingested via Gemini
-   OCR fallback (4 chunks). Previously failed.
+2. **กำแพงแสน / ศรีราชา not ingested** — queries about those campuses return the no-data guard
+   message. Fix: add folder IDs to `EXTRA_CAMPUS_FOLDERS` in `download_data.py`.
 
-3. **Duplicate program_id** — two veterinary PDFs both map to `bangkhen_2565`. Cosmetic only.
+3. **OCR failure rate ~25%** — `gemini-2.5-flash-lite` fails on poor scans. Set
+   `OCR_MODEL=google/gemini-2.5-flash` in `.env` before a full ingest run.
 
 4. **TCAS coverage gaps** — only programs in our specific TCAS PDFs are covered.
    SKE Thai-language track is NOT in the TCAS data.
 
 5. **Multi-program queries** — asking about 2+ programs simultaneously may only surface one
    program's TCAS data (TCAS lookup uses top chunk's filename).
+
+6. **ศึกษาศาสตร์ program has wrong name_th** — stored as a form template title; Thai
+   queries for "ศึกษาศาสตร์" will not resolve this program.
 
 ## Working Sample Queries
 
@@ -118,9 +125,10 @@ Query:
 
 ## Next Steps (not yet done)
 
-- Add กำแพงแสน / ศรีราชา folder IDs to `EXTRA_CAMPUS_FOLDERS` in `download_data.py`, then re-run
-  `kuru-download` + `kuru-ingest-mko <campus>`
-- Fix PLO detection: add more header patterns to `chunker.py` SECTION_PATTERNS, re-ingest
-- Populate `name_en` in programs table to improve English program name resolution
-- Set up Neo4j connection (NEO4J_URI/USERNAME/PASSWORD in .env) for graph queries
+- Add กำแพงแสน / ศรีราชา folder IDs to `EXTRA_CAMPUS_FOLDERS` in `download_data.py`, then:
+  `uv run kuru-download --sync` + `uv run kuru-ingest-mko <campus>`
+- Full 260-file re-ingest with `OCR_MODEL=google/gemini-2.5-flash` to fix ~25% OCR failures
+- Fix ศึกษาศาสตร์ program: update `name_th` in Supabase programs table to the correct program name
 - Ingest remaining TCAS rounds when PDFs become available
+- Set up Neo4j connection (NEO4J_URI/USERNAME/PASSWORD in .env) for graph queries
+- See `docs/STATUS.md` for full roadmap with effort estimates

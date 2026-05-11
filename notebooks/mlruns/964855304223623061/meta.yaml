@@ -1,0 +1,8 @@
+artifact_location: file:///D:/work/project/main_workspace/kuru/pipeline/notebooks/mlruns/964855304223623061
+creation_time: 1778456898422
+experiment_id: '964855304223623061'
+last_update_time: 1778456898422
+lifecycle_stage: active
+name: kuru-rag-hyperparameter-search
+trace_location: null
+workspace: default

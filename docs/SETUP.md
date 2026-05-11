@@ -1,42 +1,58 @@
 # KUru Pipeline — Setup Guide
 
-This guide walks you through everything from getting API credentials to running the first demo.
+Complete walkthrough from credentials to first demo.
 
 ---
 
 ## Prerequisites
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager (`pip install uv`)
-- Node.js (only needed for `npx skills add`, optional)
+- [`uv`](https://docs.astral.sh/uv/) — `pip install uv`
+- A [Supabase](https://supabase.com) project with pgvector enabled
+- A [Neo4j Aura Free](https://neo4j.com/cloud/platform/aura-graph-database/) instance _(optional — only needed for PLO graph queries)_
+- An [OpenRouter](https://openrouter.ai) API key (for Gemini generation)
+- Google Drive access to the KU curriculum folder (read-only link)
 
 ---
 
-## Step 1 — Get Your API Credentials
+## Step 1 — Credentials
 
-Fill in `.env` (copy from `.env.example`). Here's where to get each value:
+Copy `.env.example` to `.env` and fill in:
 
-### `GEMINI_API_KEY`
-1. Go to [aistudio.google.com](https://aistudio.google.com)
-2. Click **Get API key** → **Create API key**
-3. Copy the key — this is free tier (no billing required)
+```env
+# OpenRouter (LLM generation)
+OPENROUTER_API_KEY=sk-or-...
 
-### `SUPABASE_URL` and `SUPABASE_KEY`
-1. Go to your Supabase project dashboard
-2. **Project Settings** → **API**
-3. Copy **Project URL** → `SUPABASE_URL`
-4. Copy **service_role** secret key → `SUPABASE_KEY`
-   - Use `service_role` (not `anon`) so the pipeline can write to tables
+# Supabase (vector store)
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_KEY=<service_role key>
+DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres
 
-### `DATABASE_URL`
-1. Same page: **Project Settings** → **Database** → **Connection string** → **URI** tab
+# Neo4j (PLO graph — optional)
+NEO4J_URI=neo4j+s://<id>.databases.neo4j.io
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=<password>
+```
+
+### Where to get each key
+
+**`OPENROUTER_API_KEY`**
+1. Sign up at [openrouter.ai](https://openrouter.ai)
+2. Dashboard → **Keys** → **Create key**
+3. Add credit ($5 is enough for a full ingest run)
+
+**`SUPABASE_URL` and `SUPABASE_KEY`**
+1. Supabase dashboard → **Project Settings** → **API**
+2. Copy **Project URL** → `SUPABASE_URL`
+3. Copy **service_role** key → `SUPABASE_KEY` (not the `anon` key — write access needed)
+
+**`DATABASE_URL`**
+1. Same page → **Database** → **Connection string** → **URI** tab
 2. Replace `[YOUR-PASSWORD]` with your database password
-3. Format: `postgresql://postgres:PASSWORD@db.PROJECT_REF.supabase.co:5432/postgres`
 
-### `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
-1. Go to [console.neo4j.io](https://console.neo4j.io) → **New Instance** → choose **Free** (AuraDB Free)
-2. Download the credentials file when prompted — it contains all three values
-3. `NEO4J_URI` looks like: `neo4j+s://xxxxxxxx.databases.neo4j.io`
+**`NEO4J_*`** _(skip if not using PLO graph)_
+1. [console.neo4j.io](https://console.neo4j.io) → **New Instance** → **Free**
+2. Download the generated credentials file — it contains all three values
 
 ---
 
@@ -46,75 +62,86 @@ Fill in `.env` (copy from `.env.example`). Here's where to get each value:
 uv sync
 ```
 
-This creates `.venv/` and installs all packages from `pyproject.toml`.
+Creates `.venv/` and installs everything from `pyproject.toml`. The multilingual-e5 embedding model (~280 MB) is downloaded on first query automatically.
 
 ---
 
-## Step 3 — Apply the Supabase Schema
-
-Open the **Supabase SQL Editor** for your project and run the contents of [`db/schema.sql`](../db/schema.sql).
-
-This creates:
-- `programs` table — canonical program registry
-- `chunks` table — มคอ.2 text chunks with `vector(768)` embedding column
-- `tcas_records` table — structured TCAS admission data
-- `match_chunks()` RPC function — used by the RAG engine for similarity search
-
-> If you have the Supabase MCP connected, just ask Claude to apply the schema directly.
-
----
-
-## Step 4 — Set Up Neo4j Constraints
+## Step 3 — Apply the Database Schema
 
 ```bash
 uv run kuru-setup-db
 ```
 
-This creates the uniqueness constraints on `Faculty`, `PLO`, and `SkillCluster` nodes.
-Neo4j must be running and reachable before this step.
+This connects to Supabase via `DATABASE_URL` and executes `db/schema.sql`, which creates:
+
+| Object | Purpose |
+|--------|---------|
+| `programs` table | Canonical program registry (name_th, name_en, coverage, etc.) |
+| `chunks` table | Document chunks with `vector(768)` embeddings |
+| `tcas_records` table | Structured TCAS admission data |
+| `match_chunks()` RPC | pgvector similarity search with `ivfflat.probes=50` for full recall |
+
+> **Note:** Neo4j constraints are also applied here. If Neo4j is not configured, a DNS error is printed but the Supabase setup still completes.
 
 ---
 
-## Step 5 — Download Raw Data from Google Drive
+## Step 4 — Download Raw Data
 
 ```bash
+# First time — download everything
 uv run kuru-download
+
+# Subsequent runs — only fetch files missing locally
+uv run kuru-download --sync
 ```
 
-Downloads PDFs from both Google Drive folders into:
-- `data/raw/tcas1/` — TCAS Round 1 admission PDFs
-- `data/raw/curriculum/` — มคอ.2 curriculum PDFs
+Downloads into:
+- `data/native/tcas/` — TCAS PDFs + xlsx score spreadsheets
+- `data/native/curriculum/บางเขน/` — มคอ.2 curriculum PDFs (บางเขน campus)
+- `data/native/curriculum/กพส/` — กพส campus PDFs
+- Any folders linked via `.txt` redirect files (followed automatically)
 
-**Requirement:** Both Drive folders must be set to **"Anyone with the link can view"**.
-If the download fails with an access error, check the sharing settings on Google Drive.
+**If a file fails to download** (permission or gdown glitch), add its Drive file ID to `MANUAL_RETRY` in `download_data.py` and re-run.
+
+**For additional campuses** (กำแพงแสน, ศรีราชา): add the Drive folder IDs to `EXTRA_CAMPUS_FOLDERS` in `download_data.py` once you have the links.
 
 ---
 
-## Step 6 — Ingest Curriculum Documents (มคอ.2)
-
-The curriculum Drive folder contains subfolders per วิทยาเขต (campus). The pipeline filters by campus name automatically.
+## Step 5 — Ingest Curriculum Documents (มคอ.2)
 
 ```bash
-# Default: บางเขน campus only
+# บางเขน campus (default)
 uv run kuru-ingest-mko
 
-# Other campuses (run directly):
-uv run python -m kuru.scripts.ingest_curriculum กำแพงแสน
-uv run python -m kuru.scripts.ingest_curriculum ศรีราชา
+# Specific campus
+uv run kuru-ingest-mko กำแพงแสน
+uv run kuru-ingest-mko ศรีราชา
 ```
 
-Program IDs are prefixed with the campus slug to avoid collisions, e.g.:
-- `bangkhen_cpe` (วิศวกรรมคอมพิวเตอร์ บางเขน)
-- `kamphaengsaen_agri` (เกษตร กำแพงแสน)
+For each document, the pipeline:
+1. Skips ภาคผนวก (appendix) subfolders and DOCX files when a same-stem PDF exists
+2. Extracts text — PyMuPDF for born-digital PDFs; Gemini OCR fallback for scanned pages
+3. Chunks text into ~2,000-char segments tagged by section type (`plo` / `course` / `general`)
+4. Embeds each chunk with local `multilingual-e5-base` and upserts into Supabase
+5. Extracts PLOs via Gemini and writes to Neo4j (skipped if Neo4j not configured)
+6. Updates the program's `coverage` field in the `programs` table
 
-For each PDF in the campus subfolder, the pipeline:
-1. Classifies pages (born-digital vs scanned)
-2. Extracts text (PyMuPDF for born-digital; Gemini Vision for scanned pages)
-3. Chunks text into ~500-token segments tagged by section type (`plo`, `course`, `admission`, `general`)
-4. Embeds each chunk with `text-embedding-004` and stores in Supabase pgvector
-5. Extracts PLOs via Gemini and writes `Faculty → PLO → SkillCluster` graph to Neo4j
+**OCR quality:** The default OCR model (`google/gemini-2.5-flash-lite`) has a ~25% failure rate on poor scans. For a full ingest run, set `OCR_MODEL=google/gemini-2.5-flash` in `.env` to use the stronger model (~$25 for 260 files vs ~$5, but far fewer failures).
 
-A summary table is printed on completion showing chunks stored and PLOs extracted per file.
+After ingestion, check coverage:
+```bash
+uv run kuru-coverage
+```
+
+---
+
+## Step 6 — Populate English Program Names
+
+```bash
+uv run kuru-coverage --populate-names data/program_name_mapping.csv
+```
+
+Uploads English names from the CSV to the `programs` table. Required for English-language queries like "Computer Engineering courses" to resolve to the correct program. The CSV is pre-filled for all currently ingested บางเขน programs — add rows for new campuses as you ingest them.
 
 ---
 
@@ -124,59 +151,31 @@ A summary table is printed on completion showing chunks stored and PLOs extracte
 uv run kuru-ingest-tcas
 ```
 
-For each PDF in `data/raw/tcas1/`, Gemini extracts structured admission records:
-- Program name, faculty, round
-- Quota, GPAX minimum
-- Exam score criteria (TGAT/TPAT/A-Level weights)
-- Portfolio requirements and deadlines
-
-Records are stored in the `tcas_records` Supabase table.
+Processes TCAS PDFs and xlsx spreadsheets from `data/native/tcas/`. Extracts structured records (quotas, GPAX minimums, exam weights, deadlines) into the `tcas_records` table. Currently covers round1 and round3 for บางเขน programs.
 
 ---
 
-## Step 8 — Run the RAG Demo
+## Step 8 — Run the Chatbot
 
 ```bash
 uv run kuru-demo
 ```
 
-An interactive CLI chatbot. Type `samples` to see example queries. Ask anything in Thai or English:
+Interactive CLI. Type `samples` to see example queries, `q` or `exit` to quit.
 
-```
-You: วิศวกรรมคอมพิวเตอร์มี PLO อะไรบ้าง?
-You: รอบ 1 คณะวิศวกรรมศาสตร์ต้องการ GPAX เท่าไหร่?
-You: What skills will I develop studying Computer Science?
-You: portfolio ต้องมีอะไรบ้างสำหรับการสมัคร round 1?
-```
-
-Answers are grounded in the ingested documents with source citations.
+The embedding model loads on startup (~5 seconds). First query after a cold start may take 2–3 seconds longer.
 
 ---
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---------|-----|
-| `KeyError: 'GEMINI_API_KEY'` | `.env` file not found or key not set |
-| `gdown` download fails | Set Google Drive folders to "Anyone with the link can view" |
-| Supabase upsert error on `chunks` | Schema not applied — run Step 3 |
-| `match_chunks` RPC not found | The `match_chunks` function in `schema.sql` was not executed |
-| Neo4j `ServiceUnavailable` | Instance is paused (AuraDB Free pauses after 3 days idle) — resume in [console.neo4j.io](https://console.neo4j.io) |
-| Embedding dimension mismatch | Schema uses `vector(768)` for `text-embedding-004` — do not mix models |
-
----
-
-## File Naming Convention for PDFs
-
-The pipeline derives `program_id` from the PDF filename. Use this convention for best results:
-
-```
-{program_slug}_{document_type}_{year}.pdf
-
-Examples:
-  cpe_mko2_2567.pdf       → program_id: cpe
-  ku-cs_mko2_2567.pdf     → program_id: ku-cs
-  engineering_tcas1.pdf   → program_id: engineering
-```
-
-The first segment (before `_`) becomes the `program_id` used as the key across Supabase and Neo4j.
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `KeyError: OPENROUTER_API_KEY` | `.env` missing or not loaded | Check `.env` file exists in project root |
+| gdown download fails | Drive folder not public | Set folder to "Anyone with the link can view" |
+| `match_chunks RPC not found` | Schema not applied | Run `uv run kuru-setup-db` |
+| Queries return wrong program | `name_en` not populated | Run `kuru-coverage --populate-names` |
+| CPE / other program chunks missing | IVFFlat probes too low | `kuru-setup-db` re-applies the function with `probes=50` — run it |
+| Neo4j `ServiceUnavailable` | AuraDB Free pauses after 3 days idle | Resume at [console.neo4j.io](https://console.neo4j.io) |
+| `choices=None` / OCR garbage | Weak OCR model on poor scan | Set `OCR_MODEL=google/gemini-2.5-flash` in `.env` |
+| Thai text garbled in terminal | Windows console encoding | Set `PYTHONUTF8=1` environment variable |

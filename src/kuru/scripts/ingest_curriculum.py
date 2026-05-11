@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import math
+import os
 import re
 import sys
+import threading
 import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows UTF-8 fix
@@ -12,20 +19,20 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from kuru.db import supabase_client as db
 from kuru.ingestion.chunker import chunk_document
-from kuru.ingestion.embedder import embed_and_store
-from kuru.ingestion.plo_extractor import extract_plos_from_pdf, store_plos_to_neo4j
-from kuru.ingestion.text_extractor import extract_text_auto, full_text
+from kuru.ingestion.embedder import embed_and_store, _get_model
+from kuru.ingestion.structured_extractor import StructuredProgram, extract_structured
+from kuru.ingestion.text_extractor import PageText, extract_text_auto, full_text
+from kuru.llm import session_usage
 
 load_dotenv()
 
 console = Console(legacy_windows=False)
 
 DEFAULT_CAMPUS = "บางเขน"
-INTER_FILE_SLEEP = 5   # seconds between files — Gemini 2.0-flash free tier: 15 RPM
+FILE_WORKERS = 3  # parallel file ingestion — 3 files × 3 OCR batch workers = 9 concurrent API calls
 
 
 def _program_id_from_path(pdf_path: Path, campus: str) -> str:
@@ -35,13 +42,199 @@ def _program_id_from_path(pdf_path: Path, campus: str) -> str:
         "ศรีราชา": "sriracha",
     }.get(campus, re.sub(r"\s+", "_", campus).lower())
 
-    stem = pdf_path.stem
-    ascii_part = re.sub(r"[^a-zA-Z0-9]", "", stem.encode("ascii", errors="ignore").decode()).lower()
-    name_part = ascii_part[:24] if ascii_part else f"doc{abs(hash(stem)) % 9999}"
+    # Use the faculty subfolder (e.g. "eng", "agri") as a stable prefix.
+    campus_dir = Path("data/native/curriculum") / campus
+    try:
+        rel = pdf_path.relative_to(campus_dir)
+        faculty_part = rel.parts[0] if len(rel.parts) > 1 else ""
+        faculty_part = re.sub(r"[^a-zA-Z0-9]", "", faculty_part.encode("ascii", errors="ignore").decode()).lower()
+    except ValueError:
+        faculty_part = ""
+
+    # Hash the stem to guarantee uniqueness even when Thai names strip to nothing.
+    stem_hash = hashlib.md5(pdf_path.stem.encode()).hexdigest()[:8]
+    name_part = f"{faculty_part}_{stem_hash}" if faculty_part else stem_hash
     return f"{campus_slug}_{name_part}"
 
 
-def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
+_CURRICULUM_MARKERS = re.compile(
+    r"มคอ\.?\s*2|หลักสูตร|สาขาวิชา|ปริญญา|curriculum|programme|program",
+    re.IGNORECASE,
+)
+
+# PDFs whose filename announces that the program was officially closed.
+_CLOSED_RE = re.compile(r"ปิดหลักสูตร|สภาฯ.{0,10}อนุมัติปิด")
+
+_DEGREE_YEAR_RE = re.compile(r"_\d{4}(?:_\d+)*$")
+
+# Short-form degree abbreviations and filler words
+_DEGREE_PREFIX_RE = re.compile(
+    r"^(?:วศ\.บ\.|วท\.บ\.|น\.บ\.|ศ\.บ\.|บธ\.บ\.|รป\.บ\.|วท\.ม\.|วศ\.ม\.|ปร\.ด\.|ศศ\.บ\.|อ\.บ\.|ทล\.บ\.|กษ\.บ\.|สพ\.บ\.|พย\.บ\.|สต\.บ\.)\s*"
+    r"|^(?:สาขาวิชา|หลักสูตร)\s*",
+    re.UNICODE,
+)
+
+# Full Thai degree name followed by parenthesised program: "วิศวกรรมศาสตรบัณฑิต(สาขาวิชาX)" → X
+_DEGREE_PAREN_RE = re.compile(
+    r"^(?:วิศวกรรมศาสตรบัณฑิต|วิทยาศาสตรบัณฑิต|นิติศาสตรบัณฑิต|ศิลปศาสตรบัณฑิต|"
+    r"บริหารธุรกิจบัณฑิต|รัฐศาสตรบัณฑิต|เกษตรศาสตรบัณฑิต|สัตวแพทยศาสตรบัณฑิต|"
+    r"พยาบาลศาสตรบัณฑิต)\s*\(([^)]+)\)",
+    re.UNICODE,
+)
+
+_EN_NAME_RE = re.compile(
+    r"(?:Bachelor|Master|Doctor)\s+of\s+[\w\s,\-]+?Program\s+in\s+[^\n\r]{5,80}",
+    re.IGNORECASE,
+)
+
+def _is_curriculum_doc(text: str) -> bool:
+    """Return False if the extracted text doesn't look like a มคอ.2 curriculum document."""
+    return bool(_CURRICULUM_MARKERS.search(text[:3000]))
+
+
+_SUFFIX_RE = re.compile(
+    r"\s*(?:ฉบับปรับปรุง|ฉบับ\s*\d+|พ\.ศ\.)\s*\d{4}.*$"
+    r"|\s+(?:final|revised|version|v\d).*$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+_SUFFIX_RE = re.compile(
+    r"\s*\([^)]*(?:ปกติ|พิเศษ|นานาชาติ|ภาษาอังกฤษ|IDDP|IUP|Regular|Special|Intl)[^)]*\)\s*$"
+    r"|\s*(?:ฉบับปร[ับ]+ปรุง|ฉบับ\s*\d+|พ\.ศ\.)\s*\d{4}.*$"
+    r"|\s+(?:final|revised|version|v\d).*$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _program_name_from_stem(stem: str) -> str:
+    """Clean Thai program name from a PDF stem.
+
+    '67BThai-04CPE สาขาวิชาวิศวกรรมคอมพิวเตอร์ (ปกติ)' → 'วิศวกรรมคอมพิวเตอร์'
+    'วศ.บ._วิศวกรรมคอมพิวเตอร์_2562' → 'วิศวกรรมคอมพิวเตอร์'
+    'CPE-69' → 'CPE-69' (no Thai; caller should fall back to name_en)
+    """
+    name = _DEGREE_YEAR_RE.sub("", stem).replace("_", " ").strip()
+
+    # If "สาขาวิชา" appears, extract the program name after it
+    if "สาขาวิชา" in name:
+        name = name.split("สาขาวิชา", 1)[1].strip()
+    else:
+        # Handle "DegreeName(สาขาวิชาX)" pattern
+        m = _DEGREE_PAREN_RE.match(name)
+        if m:
+            name = m.group(1).strip()
+        # Strip stacked degree/filler prefixes until stable
+        while True:
+            stripped = _DEGREE_PREFIX_RE.sub("", name).strip()
+            if stripped == name:
+                break
+            name = stripped
+
+    # Strip trailing track/edition noise
+    return _SUFFIX_RE.sub("", name).strip()
+
+
+def _degree_level(stem: str) -> str:
+    if "ปร.ด" in stem or "Ph.D" in stem:
+        return "doctoral"
+    if any(x in stem for x in ("วท.ม", "ศศ.ม", "บธ.ม", "วศ.ม", "ผ.ม", "M.S.", "M.B.A")):
+        return "master"
+    return "bachelor"
+
+
+# มคอ.2 section-1 patterns: "ภาษาอังกฤษ  Master of Engineering Program in X"
+_TH_LABEL_RE = re.compile(
+    r"ภาษาไทย\s*[:\-]?\s*(หลักสูตร[^\n\r]{5,120})",
+    re.UNICODE,
+)
+_EN_LABEL_RE = re.compile(
+    r"ภาษาอังกฤษ\s*[:\-]?\s*([A-Za-z][^\n\r]{5,120})",
+    re.UNICODE,
+)
+# Broad fallback: "Master/Bachelor/Doctor of ... Program in ..."
+_EN_NAME_BROAD_RE = re.compile(
+    r"(?:Bachelor|Master|Doctor|Programme|Program)\s+of\s+[\w\s,\-]+?(?:Program(?:me)?\s+in\s+)?[A-Z][^\n\r]{5,80}",
+    re.IGNORECASE,
+)
+
+
+def _extract_name_en(doc_text: str) -> str | None:
+    # Try มคอ.2 ภาษาอังกฤษ label first (works for both native and OCR'd text)
+    m = _EN_LABEL_RE.search(doc_text[:8000])
+    if m:
+        return m.group(1).strip()[:150]
+    # Fallback: "Bachelor/Master/Doctor of ... Program in ..."
+    m = _EN_NAME_RE.search(doc_text[:8000])
+    if m:
+        return m.group(0).strip()[:150]
+    # Broad fallback — search full text (handles chunk-split labels)
+    m = _EN_NAME_BROAD_RE.search(doc_text)
+    return m.group(0).strip()[:150] if m else None
+
+
+def _extract_name_th_from_content(doc_text: str) -> str | None:
+    """Extract Thai program name from มคอ.2 section 1 content (ภาษาไทย label)."""
+    m = _TH_LABEL_RE.search(doc_text[:8000])
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    # Strip leading "หลักสูตร" and extract สาขาวิชา portion
+    if "สาขาวิชา" in raw:
+        raw = raw.split("สาขาวิชา", 1)[1].strip()
+    else:
+        raw = re.sub(r"^หลักสูตร\s*", "", raw).strip()
+        raw = _DEGREE_PREFIX_RE.sub("", raw).strip()
+    return _SUFFIX_RE.sub("", raw).strip()[:100] or None
+
+
+def _load_name_mapping() -> dict[str, dict]:
+    """Load data/program_name_mapping.csv → {program_id: {name_en, name_th_canonical}}."""
+    csv_path = Path("data/program_name_mapping.csv")
+    if not csv_path.exists():
+        return {}
+    result: dict[str, dict] = {}
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            result[row["program_id"]] = {
+                "name_en": row.get("name_en") or None,
+                "name_th_canonical": row.get("name_th_canonical") or None,
+            }
+    return result
+
+
+def _build_coverage(
+    pages: list[PageText],
+    structured: StructuredProgram,
+    name_en_source: str | None,
+) -> dict:
+    total_pages = len(pages)
+    scanned_pages = sum(1 for p in pages if p.extraction_method == "scanned")
+    typhoon_pages = sum(1 for p in pages if p.extraction_method == "typhoon_page")
+
+    if scanned_pages == total_pages and total_pages > 0:
+        method = "scanned"
+    elif typhoon_pages > 0:
+        method = "pymupdf+typhoon_pages"
+    else:
+        method = "pymupdf"
+
+    return {
+        "extraction_method": method,
+        "has_overview": bool(structured.overview),
+        "has_plos": len(structured.plos) > 0,
+        "plo_count": len(structured.plos),
+        "has_courses": len(structured.courses) > 0,
+        "course_count": len(structured.courses),
+        "has_timeline": len(structured.year_timeline) > 0,
+        "has_curriculum_mapping": len(structured.curriculum_mapping) > 0,
+        "scanned_pages": scanned_pages,
+        "total_pages": total_pages,
+        "name_en_source": name_en_source,
+    }
+
+
+def ingest_document(pdf_path: Path, campus: str, name_mapping: dict, verbose: bool = False) -> dict:
     """Full pipeline for one curriculum document (PDF or DOCX). Returns a status dict."""
     program_id = _program_id_from_path(pdf_path, campus)
     status = {
@@ -49,12 +242,26 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
         "campus": campus,
         "program_id": program_id,
         "chunks": 0,
-        "plos": 0,
         "skipped": False,
         "errors": [],
     }
 
     client = db.get_client()
+
+    name_th = _program_name_from_stem(pdf_path.stem)
+
+    # Resolve English name: CSV mapping first, auto-extract from text later
+    mapping = name_mapping.get(program_id, {})
+    name_en_from_csv = mapping.get("name_en")
+    name_en_source: str | None = "csv_mapping" if name_en_from_csv else None
+
+    db.upsert_program(client, {
+        "id": program_id,
+        "name_th": name_th,
+        "name_en": name_en_from_csv,
+        "faculty": campus,
+        "degree_level": _degree_level(pdf_path.stem),
+    })
 
     # ── Resume: skip if already fully ingested ──────────────────────────────
     existing = db.count_chunks(client, pdf_path.name)
@@ -63,14 +270,46 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
         status["skipped"] = True
         return status
 
-    db.upsert_program(client, {"id": program_id, "name_th": program_id, "faculty": campus})
-
     # ── Text extraction ─────────────────────────────────────────────────────
     try:
         pages = extract_text_auto(pdf_path, use_vision_fallback=True, verbose=verbose)
         doc_text = full_text(pages)
     except Exception as exc:
         status["errors"].append(f"text extraction ({type(exc).__name__}): {exc}")
+        return status
+
+    # ── Scanned PDF — attempt OCR then fall through to chunking ────────────
+    all_scanned = all(p.extraction_method == "scanned" for p in pages)
+    if all_scanned:
+        from kuru.ingestion.ocr_extractor import extract_with_ocr  # noqa: PLC0415
+        ocr_text = extract_with_ocr(pdf_path, verbose=verbose)
+        if not ocr_text.strip():
+            coverage = _build_coverage(pages, StructuredProgram(), name_en_source)
+            db.update_program_structured(client, program_id, {"coverage": coverage})
+            status["errors"].append("scanned PDF — OCR yielded no text")
+            return status
+        pages = [PageText(page_num=0, text=ocr_text, extraction_method="gemini_ocr")]
+        doc_text = ocr_text
+
+    # ── Backfill names from document content (overrides stem-based name_th) ──
+    # Content-extracted names are more accurate than filename stems, especially
+    # for data/raw files with short Thai naming like วศ.ม._วิศวกรรมไฟฟ้า_2565.pdf
+    name_updates: dict = {}
+    if not name_en_from_csv:
+        name_en_auto = _extract_name_en(doc_text)
+        if name_en_auto:
+            name_updates["name_en"] = name_en_auto
+            name_en_source = "auto_extracted"
+    name_th_from_content = _extract_name_th_from_content(doc_text)
+    if name_th_from_content and name_th_from_content != name_th:
+        name_updates["name_th"] = name_th_from_content
+    if name_updates:
+        db.upsert_program(client, {"id": program_id, **name_updates})
+
+    # ── Curriculum check — skip MOUs, agreements, announcements ────────────
+    if not _is_curriculum_doc(doc_text):
+        status["skipped"] = True
+        status["errors"].append("not a curriculum doc (no มคอ.2 markers) — skipped")
         return status
 
     # ── Chunking ────────────────────────────────────────────────────────────
@@ -88,21 +327,23 @@ def ingest_document(pdf_path: Path, campus: str, verbose: bool = False) -> dict:
     except Exception as exc:
         status["errors"].append(f"embedding ({type(exc).__name__}): {exc}")
 
-    # ── PLO extraction + Neo4j ──────────────────────────────────────────────
-    try:
-        result = extract_plos_from_pdf(pdf_path, program_id=program_id, verbose=verbose)
-        if result:
-            store_plos_to_neo4j(result)
-            status["plos"] = len(result.plos)
-            db.upsert_program(client, {
-                "id": program_id,
-                "name_th": result.faculty_name_th,
-                "faculty": campus,
-            })
-    except Exception as exc:
-        status["errors"].append(f"PLO extraction ({type(exc).__name__}): {exc}")
+    # ── Structured extraction ───────────────────────────────────────────────
+    structured = extract_structured(doc_text, verbose=verbose)
+    coverage = _build_coverage(pages, structured, name_en_source)
+
+    db.update_program_structured(client, program_id, {
+        "overview": structured.overview or None,
+        "plos": structured.plos,
+        "courses": structured.courses,
+        "year_timeline": structured.year_timeline,
+        "curriculum_mapping": structured.curriculum_mapping,
+        "coverage": coverage,
+    })
 
     return status
+
+
+_APPENDIX_RE = re.compile(r"ภาคผนวก", re.IGNORECASE)
 
 
 def find_documents(base_dir: Path, campus: str) -> list[Path]:
@@ -111,6 +352,25 @@ def find_documents(base_dir: Path, campus: str) -> list[Path]:
         p for p in base_dir.rglob("*")
         if p.suffix.lower() in {".pdf", ".docx"}
     )
+    # Drop officially-closed programs.
+    closed = [p for p in all_docs if _CLOSED_RE.search(p.name)]
+    if closed:
+        console.print(f"[dim]Skipping {len(closed)} closed-program file(s) (ปิดหลักสูตร)[/dim]")
+    all_docs = [p for p in all_docs if not _CLOSED_RE.search(p.name)]
+
+    # Drop appendix folders (ภาคผนวก) — supporting docs, not curriculum programs.
+    appendix = [p for p in all_docs if any(_APPENDIX_RE.search(part) for part in p.parts)]
+    if appendix:
+        console.print(f"[dim]Skipping {len(appendix)} appendix file(s) (ภาคผนวก)[/dim]")
+    all_docs = [p for p in all_docs if not any(_APPENDIX_RE.search(part) for part in p.parts)]
+
+    # When a folder has both PDF and DOCX with the same stem, keep only the PDF.
+    pdf_stems = {p.parent / p.stem for p in all_docs if p.suffix.lower() == ".pdf"}
+    docx_dupes = [p for p in all_docs if p.suffix.lower() == ".docx" and (p.parent / p.stem) in pdf_stems]
+    if docx_dupes:
+        console.print(f"[dim]Skipping {len(docx_dupes)} DOCX duplicate(s) (PDF version exists)[/dim]")
+    all_docs = [p for p in all_docs if p not in docx_dupes]
+
     matches = [p for p in all_docs if campus in str(p)]
     if matches:
         return matches
@@ -122,37 +382,119 @@ def find_documents(base_dir: Path, campus: str) -> list[Path]:
     return all_docs
 
 
-def main(campus: str | None = None) -> None:
+def sample_documents(docs: list[Path], n: int, campus_dir: Path) -> list[Path]:
+    """Pick n files spread proportionally across faculty subfolders for variety."""
+    by_faculty: defaultdict[str, list[Path]] = defaultdict(list)
+    for p in docs:
+        try:
+            faculty = p.relative_to(campus_dir).parts[0]
+        except (ValueError, IndexError):
+            faculty = "_other"
+        by_faculty[faculty].append(p)
+
+    faculties = sorted(by_faculty)
+    sampled: list[Path] = []
+    remaining = n
+
+    for i, faculty in enumerate(faculties):
+        faculties_left = len(faculties) - i
+        take = math.ceil(remaining / faculties_left)
+        take = min(take, len(by_faculty[faculty]), remaining)
+        sampled.extend(by_faculty[faculty][:take])
+        remaining -= take
+        if remaining <= 0:
+            break
+
+    console.print(f"[dim]Sample: {len(sampled)} files across {len(by_faculty)} faculties[/dim]")
+    for faculty in faculties:
+        taken = [p for p in sampled if faculty in str(p)]
+        if taken:
+            console.print(f"  [dim]{faculty}: {len(taken)} file(s)[/dim]")
+    return sampled
+
+
+def main(campus: str | None = None, sample: int | None = None) -> None:
+    args = sys.argv[1:]
     if campus is None:
-        campus = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CAMPUS
-    base_dir = Path("data/raw/curriculum")
+        campus = next((a for a in args if not a.startswith("--")), DEFAULT_CAMPUS)
+    if sample is None:
+        for a in args:
+            if a.startswith("--sample="):
+                sample = int(a.split("=", 1)[1])
+            elif a == "--sample" and args.index(a) + 1 < len(args):
+                sample = int(args[args.index(a) + 1])
+
+    base_dir = Path("data/native/curriculum")
     if not base_dir.exists():
-        console.print("[red]data/raw/curriculum/ not found. Run kuru-download first.[/red]")
+        console.print("[red]data/native/curriculum/ not found. Run kuru-download first.[/red]")
         sys.exit(1)
+
+    name_mapping = _load_name_mapping()
+    console.print(f"[dim]Loaded {len(name_mapping)} name mapping(s) from CSV[/dim]")
 
     docs = find_documents(base_dir, campus)
     if not docs:
         console.print(f"[yellow]No documents found for campus '{campus}' under {base_dir}[/yellow]")
         sys.exit(0)
 
+    campus_dir = base_dir / campus
+    if sample and sample < len(docs):
+        docs = sample_documents(docs, sample, campus_dir)
+
     console.print(f"\n[bold]Campus:[/bold] [cyan]{campus}[/cyan]")
-    console.print(f"[bold]Found {len(docs)} document(s) — checking which need ingestion …[/bold]\n")
+    console.print(f"[bold]Processing {len(docs)} document(s) — checking which need ingestion …[/bold]\n")
+
+    # Pre-load embedding model once before threads start (avoids race condition).
+    console.print("[dim]Loading embedding model …[/dim]")
+    _get_model()
 
     results = []
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Processing …", total=len(docs))
-        for pdf in docs:
-            progress.update(task, description=f"[cyan]{pdf.name[:60]}[/cyan]")
-            status = ingest_document(pdf, campus=campus, verbose=False)
+    completed = 0
+    console.print(f"[dim]Running {FILE_WORKERS} files in parallel …[/dim]\n")
+
+    # Background heartbeat — prints every 30s so the terminal doesn't look frozen.
+    _start = time.time()
+    _stop_heartbeat = threading.Event()
+
+    def _heartbeat():
+        while not _stop_heartbeat.wait(30):
+            elapsed = int(time.time() - _start)
+            m, s = divmod(elapsed, 60)
+            in_flight = min(FILE_WORKERS, len(docs) - completed)
+            console.print(f"  [dim]... still running — {m:02d}:{s:02d} elapsed, {completed}/{len(docs)} done[/dim]")
+
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
+
+    pool = ThreadPoolExecutor(max_workers=FILE_WORKERS)
+    futures = {pool.submit(ingest_document, pdf, campus, name_mapping, False): pdf for pdf in docs}
+    try:
+        for future in as_completed(futures):
+            status = future.result()
             results.append(status)
-            progress.advance(task)
-            if not status["skipped"]:
-                time.sleep(INTER_FILE_SLEEP)
+            completed += 1
+            tag = "[dim]skip[/dim]" if status["skipped"] else (
+                "[red]FAIL[/red]" if status["errors"] else "[green]✓[/green]"
+            )
+            cost_str = (
+                f" [dim][~${session_usage.estimated_cost_usd:.4f} spent][/dim]"
+                if session_usage.calls and not status["skipped"]
+                else ""
+            )
+            console.print(
+                f"  {tag} [{completed}/{len(docs)}] {status['file'][:55]}"
+                + (f" → chunks={status['chunks']}{cost_str}" if not status["skipped"] else "")
+            )
+    except KeyboardInterrupt:
+        _stop_heartbeat.set()
+        console.print("\n[yellow]Interrupted — cancelling queued files …[/yellow]")
+        for f in futures:
+            f.cancel()
+        pool.shutdown(wait=False)
+        console.print(f"[yellow]Stopped at {completed}/{len(docs)} files. Re-run to resume.[/yellow]")
+        import os; os._exit(0)
+
+    _stop_heartbeat.set()
 
     # ── Summary ─────────────────────────────────────────────────────────────
     console.print("\n[bold]Ingestion Summary[/bold]")
@@ -165,7 +507,7 @@ def main(campus: str | None = None) -> None:
     for r in done:
         console.print(
             f"  [green]✓[/green] {r['file']} → [green]{r['program_id']}[/green] "
-            f"chunks={r['chunks']} PLOs={r['plos']}"
+            f"chunks={r['chunks']}"
         )
     for r in failed:
         console.print(f"  [red]✗[/red] {r['file']} → {r['program_id']}")
@@ -176,8 +518,34 @@ def main(campus: str | None = None) -> None:
         f"\n[bold]Done.[/bold] {len(done)} ingested, "
         f"{len(skipped)} skipped, {len(failed)} failed."
     )
+    if session_usage.calls:
+        console.print(f"  [bold]API usage:[/bold] {session_usage.summary()}")
+
+    # Refresh planner stats so pgvector queries use the index instead of seq-scanning.
+    # Without this, queries time out after a bulk ingest until VACUUM runs.
+    if done:
+        _vacuum_chunks()
+
+
+def _vacuum_chunks() -> None:
+    """Run VACUUM ANALYZE chunks to refresh pgvector planner stats after bulk insert."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        console.print("[yellow]DATABASE_URL not set — skipping post-ingest VACUUM ANALYZE[/yellow]")
+        return
+    try:
+        import psycopg2  # noqa: PLC0415
+        console.print("\n[dim]Running VACUUM ANALYZE chunks …[/dim]")
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 0;")
+            cur.execute("VACUUM ANALYZE chunks;")
+        conn.close()
+        console.print("[dim]VACUUM done.[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]VACUUM failed ({type(exc).__name__}): {exc}[/yellow]")
 
 
 if __name__ == "__main__":
-    campus_arg = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CAMPUS
-    main(campus=campus_arg)
+    main()

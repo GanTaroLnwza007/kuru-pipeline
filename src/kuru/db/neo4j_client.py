@@ -40,6 +40,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT faculty_id IF NOT EXISTS FOR (f:Faculty) REQUIRE f.id IS UNIQUE",
     "CREATE CONSTRAINT plo_id IF NOT EXISTS FOR (p:PLO) REQUIRE p.id IS UNIQUE",
     "CREATE CONSTRAINT skill_name IF NOT EXISTS FOR (s:SkillCluster) REQUIRE s.name IS UNIQUE",
+    "CREATE CONSTRAINT course_code IF NOT EXISTS FOR (c:Course) REQUIRE c.code IS UNIQUE",
 ]
 
 
@@ -122,6 +123,56 @@ def ingest_program_plos(
             )
 
 
+def upsert_course(session: Session, course_code: str, course_name: str, faculty_id: str) -> None:
+    session.run(
+        """
+        MERGE (c:Course {code: $code})
+        SET c.name = $name
+        WITH c
+        MATCH (f:Faculty {id: $faculty_id})
+        MERGE (f)-[:HAS_COURSE]->(c)
+        """,
+        code=course_code, name=course_name, faculty_id=faculty_id,
+    )
+
+
+def upsert_course_plo_edge(
+    session: Session,
+    course_code: str,
+    plo_id: str,
+    level: str,
+) -> None:
+    """Wire (Course)-[:ADDRESSES {level}]->(PLO). level is 'X' or 'X*'."""
+    session.run(
+        """
+        MATCH (c:Course {code: $course_code})
+        MATCH (p:PLO {id: $plo_id})
+        MERGE (c)-[r:ADDRESSES]->(p)
+        SET r.level = $level
+        """,
+        course_code=course_code, plo_id=plo_id, level=level,
+    )
+
+
+def ingest_plo_course_mappings(
+    faculty_id: str,
+    mappings: list[dict[str, Any]],
+) -> None:
+    """Write Course nodes and ADDRESSES edges from ตารางผลลัพธ์การเรียนรู้ระดับรายวิชา.
+
+    Each mapping dict must have:
+      - course_code: str
+      - course_name: str
+      - plo_mapping: list[dict] with keys 'plo_id' and 'level' ('X' or 'X*')
+    """
+    with session_ctx() as s:
+        for m in mappings:
+            upsert_course(s, m["course_code"], m["course_name"], faculty_id)
+            for pm in m.get("plo_mapping", []):
+                plo_id = f"{faculty_id}_{pm['plo_id']}"
+                upsert_course_plo_edge(s, m["course_code"], plo_id, pm.get("level", "X"))
+
+
 # ─────────────────────────────────────────
 # Read operations
 # ─────────────────────────────────────────
@@ -136,5 +187,31 @@ def get_plos_for_faculty(faculty_id: str) -> list[dict[str, Any]]:
                    collect(sk.name) as skill_clusters
             """,
             faculty_id=faculty_id,
+        )
+        return [dict(r) for r in result]
+
+
+def get_courses_for_plo(plo_id: str) -> list[dict[str, Any]]:
+    with session_ctx() as s:
+        result = s.run(
+            """
+            MATCH (c:Course)-[r:ADDRESSES]->(p:PLO {id: $plo_id})
+            RETURN c.code as course_code, c.name as course_name, r.level as level
+            ORDER BY r.level DESC, c.code
+            """,
+            plo_id=plo_id,
+        )
+        return [dict(r) for r in result]
+
+
+def get_plos_for_course(course_code: str) -> list[dict[str, Any]]:
+    with session_ctx() as s:
+        result = s.run(
+            """
+            MATCH (c:Course {code: $course_code})-[r:ADDRESSES]->(p:PLO)
+            RETURN p.id as plo_id, p.text as plo_text, r.level as level
+            ORDER BY r.level DESC, p.id
+            """,
+            course_code=course_code,
         )
         return [dict(r) for r in result]

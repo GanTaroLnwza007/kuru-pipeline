@@ -8,12 +8,18 @@ create extension if not exists vector;
 -- Programs registry (canonical source of truth)
 -- ─────────────────────────────────────────
 create table if not exists programs (
-  id           text primary key,          -- e.g. 'ku-cpe', 'ku-cs', derived from filename
-  name_th      text,
-  name_en      text,
-  faculty      text,
-  degree_level text default 'bachelor',
-  created_at   timestamptz default now()
+  id                  text primary key,          -- e.g. 'ku-cpe', 'ku-cs', derived from filename
+  name_th             text,
+  name_en             text,
+  faculty             text,
+  degree_level        text default 'bachelor',
+  overview            text,
+  plos                jsonb default '[]',
+  courses             jsonb default '[]',
+  year_timeline       jsonb default '[]',
+  curriculum_mapping  jsonb default '[]',
+  coverage            jsonb default '{}',
+  created_at          timestamptz default now()
 );
 
 -- ─────────────────────────────────────────
@@ -66,6 +72,29 @@ create index if not exists tcas_records_program_id_idx on tcas_records (program_
 create index if not exists tcas_records_round_idx on tcas_records (round);
 
 -- ─────────────────────────────────────────
+-- Idempotent column additions for upgrades
+-- ─────────────────────────────────────────
+alter table programs add column if not exists overview            text;
+alter table programs add column if not exists plos               jsonb default '[]';
+alter table programs add column if not exists courses            jsonb default '[]';
+alter table programs add column if not exists year_timeline      jsonb default '[]';
+alter table programs add column if not exists curriculum_mapping jsonb default '[]';
+alter table programs add column if not exists coverage           jsonb default '{}';
+
+-- ─────────────────────────────────────────
+-- User feedback on chat answers
+-- Thumbs up/down collected from the UI per answer.
+-- ─────────────────────────────────────────
+create table if not exists feedback (
+  id          uuid primary key default gen_random_uuid(),
+  session_id  text,
+  question    text,
+  answer      text,
+  rating      smallint,   -- 1 = helpful, -1 = not helpful
+  created_at  timestamptz default now()
+);
+
+-- ─────────────────────────────────────────
 -- pgvector similarity search RPC function
 -- Called by supabase_client.similarity_search()
 -- ─────────────────────────────────────────
@@ -84,19 +113,25 @@ returns table (
   metadata     jsonb,
   similarity   float
 )
-language sql stable as $$
+language plpgsql volatile as $$
+begin
+  -- Probe 50 out of 100 IVFFlat lists for full recall at this dataset size.
+  -- Default probes=1 caused ~9000 chunks to be invisible in search results.
+  set local ivfflat.probes = 50;
+  return query
   select
-    id,
-    program_id,
-    source_file,
-    section_type,
-    content,
-    metadata,
-    1 - (embedding <=> query_embedding) as similarity
-  from chunks
+    c.id,
+    c.program_id,
+    c.source_file,
+    c.section_type,
+    c.content,
+    c.metadata,
+    1 - (c.embedding <=> query_embedding) as similarity
+  from chunks c
   where
-    (filter_section is null or section_type = filter_section)
-    and (filter_program is null or program_id = filter_program)
-  order by embedding <=> query_embedding
+    (filter_section is null or c.section_type = filter_section)
+    and (filter_program is null or c.program_id = filter_program)
+  order by c.embedding <=> query_embedding
   limit match_count;
+end;
 $$;

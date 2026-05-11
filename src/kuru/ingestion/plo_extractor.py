@@ -3,33 +3,19 @@
 from __future__ import annotations
 
 import json
-import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+import fitz
 from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import neo4j_client as neo4j
-from kuru.ingestion.text_extractor import extract_text_auto, full_text
+from kuru.ingestion.text_extractor import extract_text_auto, full_text, render_page_b64
 from kuru.ingestion.utils import is_transient_error, safe_print
-
-load_dotenv()
-
-
-_client: genai.Client | None = None
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    return _client
-
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+from kuru.llm import LLM_MODEL, get_client
 
 
 # ─────────────────────────────────────────
@@ -86,6 +72,12 @@ class PLOExtractionResult(BaseModel):
     plos: list[PLOItem]
 
 
+class CoursePLOMapping(BaseModel):
+    course_code: str
+    course_name: str
+    plo_mapping: list[dict[str, str]]  # [{"plo_id": "PLO1", "level": "X" | "X*"}]
+
+
 EXTRACTION_PROMPT = """You are extracting Program Learning Outcomes (PLOs) from a Thai university curriculum document (มคอ.2).
 
 Extract ALL PLOs listed in the document. For each PLO provide:
@@ -106,16 +98,128 @@ Document text (first 30,000 characters):
 """
 
 
+# ─────────────────────────────────────────
+# Image-based table extraction
+# ─────────────────────────────────────────
+
+_TABLE_EXTRACT_PROMPT = """Look at this Thai university curriculum document page (มคอ.2).
+
+If this page contains a table called "ตารางผลลัพธ์การเรียนรู้ระดับรายวิชา"
+(a matrix mapping courses/รายวิชา to program learning outcomes/PLOs),
+extract ALL visible rows as JSON:
+
+{
+  "has_table": true,
+  "rows": [
+    {
+      "course_code": "01004653",
+      "course_name": "จริยธรรมการวิจัย",
+      "plo_mapping": [
+        {"plo_id": "PLO1", "level": "X"},
+        {"plo_id": "PLO2", "level": "X*"}
+      ]
+    }
+  ]
+}
+
+Rules:
+- "X" = the course addresses this PLO
+- "X*" = this PLO is a primary/emphasized outcome (asterisk variant — preserve the distinction)
+- Only include PLO entries where the cell contains X or X*
+- If the table continues from a previous page, extract only what is visible on this page
+
+If this page does NOT contain this table, return exactly: {"has_table": false}
+Output ONLY valid JSON, no explanation."""
+
+_TABLE_SCAN_WORKERS = 4  # parallel page scans
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
-def _call_gemini(text: str) -> str:
-    response = _get_client().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=EXTRACTION_PROMPT.replace("{text}", text[:200000]),
-        config=types.GenerateContentConfig(
-            temperature=0.0,
-        ),
+def _extract_table_from_page(page_b64: str) -> dict:
+    """Send a single page image to the vision model and extract table JSON."""
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{page_b64}"}},
+            {"type": "text", "text": _TABLE_EXTRACT_PROMPT},
+        ]}],
+        temperature=0.0,
     )
-    return response.text or "{}"
+    raw = response.choices[0].message.content or '{"has_table": false}'
+    cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {"has_table": False}
+
+
+def extract_plo_course_table(
+    pdf_path: str | Path,
+    program_id: str,
+    verbose: bool = False,
+) -> list[CoursePLOMapping]:
+    """Scan every PDF page for ตารางผลลัพธ์การเรียนรู้ระดับรายวิชา and extract as structured data.
+
+    Sends each page image to the vision model. Pages without the table return quickly.
+    Runs page scans in parallel for speed.
+    """
+    pdf_path = Path(pdf_path)
+    doc = fitz.open(str(pdf_path))
+    n_pages = len(doc)
+    doc.close()
+
+    if verbose:
+        safe_print(f"  Scanning {n_pages} pages for CLO table …")
+
+    def scan_page(page_num: int) -> tuple[int, dict]:
+        b64 = render_page_b64(pdf_path, page_num, dpi=150)
+        result = _extract_table_from_page(b64)
+        return page_num, result
+
+    all_rows: list[CoursePLOMapping] = []
+    with ThreadPoolExecutor(max_workers=_TABLE_SCAN_WORKERS) as pool:
+        futures = {pool.submit(scan_page, i): i for i in range(n_pages)}
+        for future in as_completed(futures):
+            page_num, data = future.result()
+            if not data.get("has_table"):
+                continue
+            if verbose:
+                safe_print(f"  ✓ CLO table found on page {page_num + 1}")
+            for row in data.get("rows", []):
+                try:
+                    all_rows.append(CoursePLOMapping(
+                        course_code=row.get("course_code", ""),
+                        course_name=row.get("course_name", ""),
+                        plo_mapping=row.get("plo_mapping", []),
+                    ))
+                except Exception:
+                    pass
+
+    if verbose:
+        safe_print(f"  Extracted {len(all_rows)} course–PLO mappings.")
+    return all_rows
+
+
+def store_plo_course_mappings(program_id: str, mappings: list[CoursePLOMapping]) -> None:
+    """Write course–PLO mapping edges to Neo4j."""
+    neo4j.ingest_plo_course_mappings(
+        faculty_id=program_id,
+        mappings=[m.model_dump() for m in mappings],
+    )
+
+
+# ─────────────────────────────────────────
+# Text-based PLO extraction (existing)
+# ─────────────────────────────────────────
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=15, max=120), retry=retry_if_exception(is_transient_error), reraise=True)
+def _call_llm(text: str) -> str:
+    response = get_client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": EXTRACTION_PROMPT.replace("{text}", text[:200000])}],
+        temperature=0.0,
+    )
+    return response.choices[0].message.content or "{}"
 
 
 def extract_plos_from_pdf(
@@ -131,7 +235,7 @@ def extract_plos_from_pdf(
     pages = extract_text_auto(pdf_path, use_vision_fallback=True, verbose=verbose)
     doc_text = full_text(pages)
 
-    raw_json = _call_gemini(doc_text)
+    raw_json = _call_llm(doc_text)
     cleaned = re.sub(r"```(?:json)?|```", "", raw_json).strip()
 
     try:

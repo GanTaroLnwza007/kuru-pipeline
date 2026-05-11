@@ -189,3 +189,56 @@ A 200-page scanned PDF = 200 individual API calls.
 ### Fix applied
 Replaced page-by-page OCR with Gemini Files API — uploads the entire PDF in one call
 regardless of page count. Processing time reduced from ~20 min → ~30 sec per PDF.
+
+---
+
+## ISSUE-007 — IVFFlat `probes=1` made ~8,900 chunks invisible
+
+**Status:** Fixed  
+**Date encountered:** 2026-05-03  
+**Affected components:** `match_chunks` RPC, all similarity searches
+
+### Symptom
+
+`match_chunks` with `match_count=9999` returned only 436 results (not 9,369).
+Filtered searches for specific programs (e.g. CPE `bangkhen_ddf705a9`) returned 0 results
+for most query embeddings, even though the program had 46 chunks in the DB.
+The short query "วิศวกรรมคอมพิวเตอร์" found CPE chunks; longer queries did not.
+
+### Root cause
+
+The IVFFlat index was created with `lists=100`. PostgreSQL's default `ivfflat.probes` is 1,
+meaning each query scanned only 1 of 100 index lists — approximately 1% of all chunks.
+Chunks added after the index was built are assigned to the nearest centroid, but if that
+centroid is not the one probed for a given query, the chunks are never returned.
+
+The `match_chunks` function was declared `language sql stable`, which does not allow `SET`
+statements, so there was no way to override `probes` at query time.
+
+### Fix applied
+
+Changed `match_chunks` in `db/schema.sql` from `language sql stable` to
+`language plpgsql volatile` and added `SET LOCAL ivfflat.probes = 50` before the query.
+
+```sql
+language plpgsql volatile as $$
+begin
+  set local ivfflat.probes = 50;
+  return query select ...
+end;
+$$;
+```
+
+With `probes=50` (50% of 100 lists), all 9,369 chunks are now reachable.
+Applied to the live DB by running `uv run kuru-setup-db`.
+
+### Long-term note
+
+At the current scale (< 10k chunks), `probes=50` is fast (< 100ms). If chunk count
+grows past ~50,000, consider switching to an HNSW index which doesn't require tuning:
+```sql
+DROP INDEX chunks_embedding_idx;
+CREATE INDEX chunks_embedding_idx
+  ON chunks USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+```
