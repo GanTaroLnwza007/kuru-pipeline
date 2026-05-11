@@ -25,6 +25,7 @@ from kuru.ingestion.chunker import chunk_document
 from kuru.ingestion.embedder import embed_and_store, _get_model
 from kuru.ingestion.structured_extractor import StructuredProgram, extract_structured
 from kuru.ingestion.text_extractor import PageText, extract_text_auto, full_text
+from kuru.llm import session_usage
 
 load_dotenv()
 
@@ -142,9 +143,49 @@ def _degree_level(stem: str) -> str:
     return "bachelor"
 
 
+# มคอ.2 section-1 patterns: "ภาษาอังกฤษ  Master of Engineering Program in X"
+_TH_LABEL_RE = re.compile(
+    r"ภาษาไทย\s*[:\-]?\s*(หลักสูตร[^\n\r]{5,120})",
+    re.UNICODE,
+)
+_EN_LABEL_RE = re.compile(
+    r"ภาษาอังกฤษ\s*[:\-]?\s*([A-Za-z][^\n\r]{5,120})",
+    re.UNICODE,
+)
+# Broad fallback: "Master/Bachelor/Doctor of ... Program in ..."
+_EN_NAME_BROAD_RE = re.compile(
+    r"(?:Bachelor|Master|Doctor|Programme|Program)\s+of\s+[\w\s,\-]+?(?:Program(?:me)?\s+in\s+)?[A-Z][^\n\r]{5,80}",
+    re.IGNORECASE,
+)
+
+
 def _extract_name_en(doc_text: str) -> str | None:
-    m = _EN_NAME_RE.search(doc_text[:5000])
+    # Try มคอ.2 ภาษาอังกฤษ label first (works for both native and OCR'd text)
+    m = _EN_LABEL_RE.search(doc_text[:8000])
+    if m:
+        return m.group(1).strip()[:150]
+    # Fallback: "Bachelor/Master/Doctor of ... Program in ..."
+    m = _EN_NAME_RE.search(doc_text[:8000])
+    if m:
+        return m.group(0).strip()[:150]
+    # Broad fallback — search full text (handles chunk-split labels)
+    m = _EN_NAME_BROAD_RE.search(doc_text)
     return m.group(0).strip()[:150] if m else None
+
+
+def _extract_name_th_from_content(doc_text: str) -> str | None:
+    """Extract Thai program name from มคอ.2 section 1 content (ภาษาไทย label)."""
+    m = _TH_LABEL_RE.search(doc_text[:8000])
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    # Strip leading "หลักสูตร" and extract สาขาวิชา portion
+    if "สาขาวิชา" in raw:
+        raw = raw.split("สาขาวิชา", 1)[1].strip()
+    else:
+        raw = re.sub(r"^หลักสูตร\s*", "", raw).strip()
+        raw = _DEGREE_PREFIX_RE.sub("", raw).strip()
+    return _SUFFIX_RE.sub("", raw).strip()[:100] or None
 
 
 def _load_name_mapping() -> dict[str, dict]:
@@ -237,20 +278,33 @@ def ingest_document(pdf_path: Path, campus: str, name_mapping: dict, verbose: bo
         status["errors"].append(f"text extraction ({type(exc).__name__}): {exc}")
         return status
 
-    # Backfill English name from PDF text if CSV had nothing
+    # ── Scanned PDF — attempt OCR then fall through to chunking ────────────
+    all_scanned = all(p.extraction_method == "scanned" for p in pages)
+    if all_scanned:
+        from kuru.ingestion.ocr_extractor import extract_with_ocr  # noqa: PLC0415
+        ocr_text = extract_with_ocr(pdf_path, verbose=verbose)
+        if not ocr_text.strip():
+            coverage = _build_coverage(pages, StructuredProgram(), name_en_source)
+            db.update_program_structured(client, program_id, {"coverage": coverage})
+            status["errors"].append("scanned PDF — OCR yielded no text")
+            return status
+        pages = [PageText(page_num=0, text=ocr_text, extraction_method="gemini_ocr")]
+        doc_text = ocr_text
+
+    # ── Backfill names from document content (overrides stem-based name_th) ──
+    # Content-extracted names are more accurate than filename stems, especially
+    # for data/raw files with short Thai naming like วศ.ม._วิศวกรรมไฟฟ้า_2565.pdf
+    name_updates: dict = {}
     if not name_en_from_csv:
         name_en_auto = _extract_name_en(doc_text)
         if name_en_auto:
-            db.upsert_program(client, {"id": program_id, "name_en": name_en_auto})
+            name_updates["name_en"] = name_en_auto
             name_en_source = "auto_extracted"
-
-    # ── Scanned PDF — write partial record and stop ─────────────────────────
-    all_scanned = all(p.extraction_method == "scanned" for p in pages)
-    if all_scanned:
-        coverage = _build_coverage(pages, StructuredProgram(), name_en_source)
-        db.update_program_structured(client, program_id, {"coverage": coverage})
-        status["errors"].append("scanned PDF — no native text, OCR disabled")
-        return status
+    name_th_from_content = _extract_name_th_from_content(doc_text)
+    if name_th_from_content and name_th_from_content != name_th:
+        name_updates["name_th"] = name_th_from_content
+    if name_updates:
+        db.upsert_program(client, {"id": program_id, **name_updates})
 
     # ── Curriculum check — skip MOUs, agreements, announcements ────────────
     if not _is_curriculum_doc(doc_text):
@@ -422,9 +476,14 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
             tag = "[dim]skip[/dim]" if status["skipped"] else (
                 "[red]FAIL[/red]" if status["errors"] else "[green]✓[/green]"
             )
+            cost_str = (
+                f" [dim][~${session_usage.estimated_cost_usd:.4f} spent][/dim]"
+                if session_usage.calls and not status["skipped"]
+                else ""
+            )
             console.print(
                 f"  {tag} [{completed}/{len(docs)}] {status['file'][:55]}"
-                + (f" → chunks={status['chunks']}" if not status["skipped"] else "")
+                + (f" → chunks={status['chunks']}{cost_str}" if not status["skipped"] else "")
             )
     except KeyboardInterrupt:
         _stop_heartbeat.set()
@@ -459,6 +518,8 @@ def main(campus: str | None = None, sample: int | None = None) -> None:
         f"\n[bold]Done.[/bold] {len(done)} ingested, "
         f"{len(skipped)} skipped, {len(failed)} failed."
     )
+    if session_usage.calls:
+        console.print(f"  [bold]API usage:[/bold] {session_usage.summary()}")
 
     # Refresh planner stats so pgvector queries use the index instead of seq-scanning.
     # Without this, queries time out after a bulk ingest until VACUUM runs.

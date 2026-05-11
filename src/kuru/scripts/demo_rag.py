@@ -15,6 +15,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
+from kuru.llm import session_usage
 from kuru.rag.query_engine import query
 
 load_dotenv()
@@ -140,8 +141,10 @@ def main() -> None:
                 console.print(f"  {i}. {q_text}")
             continue
 
+        cost_before = session_usage.estimated_cost_usd
         with console.status("[bold yellow]Thinking …[/bold yellow]"):
             result = query(user_input, debug=args.debug)
+        query_cost = session_usage.estimated_cost_usd - cost_before
 
         if args.debug and result.debug_info:
             show_debug(result.debug_info)
@@ -152,6 +155,9 @@ def main() -> None:
             border_style="blue",
         ))
         show_sources(result.sources, result.used_tcas_data)
+        console.print(
+            f"[dim]  cost: ~${query_cost:.4f} this query | ~${session_usage.estimated_cost_usd:.4f} session total[/dim]"
+        )
 
 
 if __name__ == "__main__":

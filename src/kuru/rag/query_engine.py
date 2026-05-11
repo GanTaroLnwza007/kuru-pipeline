@@ -9,7 +9,7 @@ from sentence_transformers import SentenceTransformer  # used by _get_embed_mode
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.db import supabase_client as db
-from kuru.llm import LLM_MODEL, get_client
+from kuru.llm import GENERATION_MODEL, get_openrouter_client, session_usage
 
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-base"
 TOP_K = 5
@@ -30,6 +30,21 @@ TCAS_KEYWORDS = re.compile(
     r"TCAS|GPAX|เกรด|รับ|สมัคร|คะแนน|รอบ|TGAT|TPAT|A-Level|quota|โควตา|วันรับ|ประกาศ|admission|score|portfolio"
     r"|enroll|apply|applying|application|qualify|qualification|requirement|สอบ|ข้อสอบ|เข้าเรียน|เข้าศึกษา|รับสมัคร|คุณสมบัติ"
     r"|อยากเข้า|จะเข้า|วิธีเข้า|ต้องทำไง|ต้องทำอะไร|ขั้นตอนการสมัคร|วิธีสมัคร",
+    re.IGNORECASE,
+)
+
+# Strong TCAS signals — scores, rounds, grades, application process
+_STRONG_TCAS_RE = re.compile(
+    r"TCAS|GPAX|เกรด|คะแนน|สมัคร|รอบ|quota|โควตา|TGAT|TPAT|A-Level|score|admission"
+    r"|enroll|apply|applying|application|qualify|qualification|requirement|สอบ|ข้อสอบ"
+    r"|เข้าเรียน|เข้าศึกษา|รับสมัคร|คุณสมบัติ|อยากเข้า|จะเข้า|วิธีเข้า|ต้องทำไง"
+    r"|ขั้นตอนการสมัคร|วิธีสมัคร|วันรับ|ประกาศ",
+    re.IGNORECASE,
+)
+
+# Signals that the question is about curriculum-level policy (nationality, language), not TCAS scores
+_CURRICULUM_POLICY_RE = re.compile(
+    r"ต่างชาติ|ต่างประเทศ|foreign.student|international.student|นิสิตต่าง",
     re.IGNORECASE,
 )
 
@@ -249,8 +264,8 @@ def _generate(context: str, question: str, conversation_history: list[dict] | No
         context=context, question=question, lang_instruction=_lang_instruction(question)
     )
     history = [{"role": t["role"], "content": t["content"]} for t in (conversation_history or [])]
-    response = get_client().chat.completions.create(
-        model=LLM_MODEL,
+    response = get_openrouter_client().chat.completions.create(
+        model=GENERATION_MODEL,
         messages=[
             {"role": "system", "content": RAG_SYSTEM_PROMPT},
             *history,
@@ -258,6 +273,8 @@ def _generate(context: str, question: str, conversation_history: list[dict] | No
         ],
         temperature=0.2,
     )
+    if response.usage:
+        session_usage.add(GENERATION_MODEL, response.usage)
     return response.choices[0].message.content or "(No response generated)"
 
 
@@ -310,6 +327,10 @@ def query(
 
     # 2. Retrieve relevant chunks from pgvector (always unfiltered first)
     is_tcas_query = bool(TCAS_KEYWORDS.search(question))
+    # Override: questions about foreign/international students are curriculum policy questions,
+    # not TCAS score questions — only suppress when there are no strong TCAS signals.
+    if is_tcas_query and _CURRICULUM_POLICY_RE.search(question) and not _STRONG_TCAS_RE.search(question):
+        is_tcas_query = False
     is_plo_query = bool(re.search(r"PLO|plo|ผลลัพธ์การเรียนรู้", question))
     is_listing_query = bool(LISTING_KEYWORDS.search(question))
     # Fetch a larger pool so re-ranking has enough material

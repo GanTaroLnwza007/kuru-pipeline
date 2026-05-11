@@ -14,7 +14,7 @@ from pathlib import Path
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from kuru.ingestion.utils import is_transient_error, png_dimensions, safe_print
-from kuru.llm import OCR_MODEL, get_gemini_client, get_ocr_client
+from kuru.llm import OCR_MODEL, _is_openrouter_model, get_gemini_client, get_ocr_client, get_openrouter_client, session_usage
 
 _PDF_EXTRACT_PROMPT = (
     "Extract all text from these PDF page images. "
@@ -49,6 +49,29 @@ def _dedup_lines(text: str) -> str:
     return "\n".join(result)
 
 
+def _ocr_batch_openrouter(images_b64: list[str]) -> str:
+    """Send page images to any vision model via OpenRouter (OpenAI-compat image_url format)."""
+    content: list[dict] = []
+    for b64 in images_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        })
+    content.append({"type": "text", "text": _PDF_EXTRACT_PROMPT})
+
+    response = get_openrouter_client().chat.completions.create(
+        model=OCR_MODEL,
+        messages=[{"role": "user", "content": content}],
+        temperature=0.0,
+        max_tokens=8192,
+    )
+    if response.usage:
+        session_usage.add(OCR_MODEL, response.usage)
+    if not response.choices:
+        return ""
+    return response.choices[0].message.content or ""
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=30, max=300),
@@ -58,6 +81,8 @@ def _dedup_lines(text: str) -> str:
 def _ocr_batch(images_b64: list[str]) -> str:
     if OCR_MODEL.startswith("typhoon"):
         return _ocr_batch_typhoon(images_b64)
+    if _is_openrouter_model(OCR_MODEL):
+        return _ocr_batch_openrouter(images_b64)
     return _ocr_batch_gemini(images_b64)
 
 

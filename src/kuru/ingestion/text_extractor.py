@@ -65,6 +65,9 @@ def _extract_page_typhoon(page_b64: str) -> str:
             top_p=0.6,
             extra_body={"repetition_penalty": 1.2},
         )
+        if response.usage:
+            from kuru.llm import session_usage  # noqa: PLC0415
+            session_usage.add("typhoon-ocr", response.usage)
         if not response.choices:
             return ""
         return response.choices[0].message.content or ""
